@@ -282,7 +282,7 @@ export function install(rt) {
               const inbox = rt.roomInbox.get(sessionId) ?? []
               const at = inbox.indexOf(early)
               if (at !== -1) inbox.splice(at, 1)
-              void rt.save()
+              void rt.save().catch(() => {})
             }
             throw error
           }
