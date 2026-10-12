@@ -51,6 +51,7 @@ export function install(rt) {
     agents: Object.values(state.agents),
     // Key names and who may use them; values never leave the host.
     secrets: rt.secretsView(),
+    capabilities: rt.capabilityLibraryView(),
     secretRequests: state.secretRequests ?? {},
     colors: [...COLORS, ...EXTRA_COLORS],
     models: rt.cachedCatalog(),
@@ -68,7 +69,13 @@ export function install(rt) {
   // What changes without a new revision, sent with every state answer. `memoryNews`:
   // per Bot, its latest memory change; `memoryReviews`: memory reviews waiting or
   // running.
-  const live = () => ({ activity: rt.activityView(), memoryNews: rt.memoryNews(), memoryReviews: rt.memoryReviews(), connectors: rt.connectorsView() })
+  const live = () => ({
+    activity: rt.activityView(),
+    memoryNews: rt.memoryNews(),
+    memoryReviews: rt.memoryReviews(),
+    connectors: rt.connectorsView(),
+    capabilityStatuses: rt.capabilityStatusesView(),
+  })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
   const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars'])
@@ -215,6 +222,12 @@ export function install(rt) {
         case 'connector-retry':
           await rt.load()
           return ok(await rt.connectorEndpoint(endpoint, body))
+        case 'capability-save':
+        case 'capability-delete':
+        case 'capability-approve':
+        case 'bot-capabilities':
+          await rt.load()
+          return ok(await rt.capabilityEndpoint(endpoint, body))
         case 'schedules':
         case 'schedule-create':
         case 'schedule-delete':
