@@ -126,8 +126,8 @@ export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, us
 function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
   if (whole && bots.length === 1) {
     return h('div', { className: 'bt-event' },
-      h('button', { type: 'button', className: 'bt-event-whole', onClick: () => onOpen?.(bots[0]) },
-        h('span', null, prefix), h(BotMark, { bot: bots[0], size: 16 }), bots[0].name))
+      h('button', { type: 'button', className: 'bt-event-whole', title: bots[0].name, onClick: () => onOpen?.(bots[0]) },
+        h('span', null, prefix), h(BotMark, { bot: bots[0], size: 16 }), h('span', { className: 'bt-event-name' }, bots[0].name)))
   }
   const parts = []
   parts.push(h('span', { key: 'p' }, prefix))
