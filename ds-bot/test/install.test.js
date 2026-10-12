@@ -42,7 +42,6 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'prompt bot-identity 640',
     'tool list_bots',
     'tool message_bot',
-    'tool interrupt_bot',
     'tool stop_bot',
     'tool create_bot',
     'tool update_bot',
