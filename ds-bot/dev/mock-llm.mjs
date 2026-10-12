@@ -235,7 +235,7 @@ function decide(body) {
   if (userText.startsWith('撑爆')) return 'overflow'
   // "长任务" keeps stepping when a Bot message splices into its turn (a relayed
   // note); only a fresh opener or "[Stopped by" ends it. A spliced "[Message
-  // from X]" also gets a one-line acknowledgement, as its joined reply's text.
+  // from X]" is taken into account there; it is answered in a turn of its own.
   const longOpener = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content).trimStart()))
   if (longOpener !== -1 && /^\[(?:Message|Reply) from /.test(userText)) {
     const task = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(textOf(messages[longOpener].content).trimStart())
@@ -243,8 +243,8 @@ function decide(body) {
     const size = Number(task[2] ?? 4)
     const done = messages.slice(longOpener + 1).filter(isResults).length
     if (done < steps) {
-      const joined = /^\[Message from ([^\]]+)\]/.exec(userText)?.[1]
-      return [text(`${joined ? `${joined} 插进来的话收到了，继续干活。\n` : ''}${filler(size * 1000, `步骤${done}`)}`), tool('list_bots', {})]
+      const joined = /^\[Message from ([^\]·]+?)(?: · [^\]]*)?\]/.exec(userText)?.[1]
+      return [text(`${joined ? `（已按 ${joined} 的话调整）\n` : ''}${filler(size * 1000, `步骤${done}`)}`), tool('list_bots', {})]
     }
   }
   // "报错": the provider rejects the key, in the user's chat or in a message from a Bot.
@@ -371,7 +371,7 @@ function decide(body) {
     const asked = userText.split('\n').slice(1).join(' ').trim().replace(/[。.!！?？]+$/u, '')
     return [text(`${match[1]} 转来一句话：「${asked}」。我先说打算：把手头已有的材料理一遍，列出还缺什么，再和你确认先后顺序；你确认之前我不会动手。`)]
   }
-  if ((match = /^\[Message from ([^\]]+)\]/.exec(userText))) {
+  if ((match = /^\[Message from ([^\]·]+?)(?: · [^\]]*)?\]/.exec(userText))) {
     return [text(`给 ${match[1]} 的回复：\n- 先做：把现有材料理一遍\n- 需要用户提供：目标和截止时间（尚未聊过）\n- 节奏：确认后每天同步一次`)]
   }
   if ((match = /^\[Reply from ([^\]]+)\]\n.* could not answer your message: its model call failed \(([^)]+)\)/.exec(userText))) {
