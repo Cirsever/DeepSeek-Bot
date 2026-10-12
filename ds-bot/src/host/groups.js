@@ -75,6 +75,27 @@ export const mentionsIn = (text, members) => {
   return { all, found }
 }
 
+// DSH writes each referenced conversation into the message as one "@label"; that is not
+// a call, even when the label starts with a member's name. Only that one "@label" goes,
+// so a "@Name" the user typed with the same text still calls.
+const dropMention = (text, label) => {
+  const mention = `@${label}`
+  for (let at = text.indexOf(mention); at !== -1; at = text.indexOf(mention, at + 1)) {
+    const end = at + mention.length
+    if ((at === 0 || !/[a-z0-9_.]/i.test(text[at - 1])) && !NAME_GOES_ON.test(text.slice(end))) return text.slice(0, at) + text.slice(end)
+  }
+  return text
+}
+export const withoutReferences = (text, references = []) => references
+  .flatMap(reference => reference.labels)
+  .sort((a, b) => b.length - a.length)
+  .reduce(dropMention, text)
+
+// What the user referenced in this round, for a member that has not been shown it yet.
+export const referenceNote = references => (references?.length
+  ? `Conversations the user referenced in this round:\n\n${references.map(reference => reference.text).join('\n\n')}`
+  : '')
+
 const ROOM_REPLY = 'Reply with your message for the group: one or two short messages, no name prefix. Reply [PASS] to stay silent when you have nothing new to add or the message is for someone else.'
 
 const slotLabel = (slot) => {
@@ -147,6 +168,7 @@ export function install(rt) {
       current.length
         ? `This round so far${spokeThisRound ? ', since your last message' : ', starting with the new message'} (oldest first):\n${transcript(current)}`
         : 'Nothing new in this round since your last message.',
+      round.shown?.includes(member.id) ? '' : referenceNote(round.references),
       `Speaking order for this round: ${round.slots.map(slotLabel).join(' → ')}.`,
       `You are number ${index + 1} of ${round.slots.length}. ${before === 0 ? 'Nobody spoke before you' : `${before} went before you`}${after === 0 ? ', and you are the last.' : `; ${after} after you will see your message.`}`,
       ROOM_REPLY,
@@ -254,6 +276,7 @@ export function install(rt) {
         continue
       }
       const prompt = roomPrompt(room, member, round)
+      round.shown?.push(member.id)
       const text = session.brief === undefined ? prompt : `${session.brief}\n\n${prompt}`
       const reply = await roomTurn(room, member, session.id, text, slot.note ?? 'your turn', signal)
       round.speaking = null
@@ -318,11 +341,13 @@ export function install(rt) {
       if (posts.some(post => !post.botId && !post.kickoff)) room.botRounds = 0
       await rt.save()
       const opener = posts.at(-1)
+      const references = posts.flatMap(post => post.references ?? [])
       const round = {
         roomId: room.id,
         members: room.members,
         startSeq,
         ...(opener.kickoff ? { kickoff: true } : {}),
+        ...(references.length > 0 ? { references, shown: [] } : {}),
         slots: openingSpeakers(room, opener).map(member => ({ id: member.id, name: member.name, status: 'waiting', ...(opener.kickoff ? { note: 'the group was just created' } : {}) })),
         speaking: null,
         turns: 0,
@@ -426,7 +451,7 @@ export function install(rt) {
     const members = room.members.map(rt.botOf).filter(bot => bot && bot.id !== opener.botId)
     const admin = members.find(bot => rt.isAdminOf(room, bot.id))
     if (opener.kickoff) return admin ? [admin] : []
-    const { all, found } = mentionsIn(opener.text, members)
+    const { all, found } = mentionsIn(withoutReferences(opener.text, opener.references), members)
     if (found.length > 0 && !all) return found
     if (!all && room.mode === 'admin' && admin) return [admin]
     return admin ? [admin, ...members.filter(bot => bot !== admin)] : members

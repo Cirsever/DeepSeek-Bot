@@ -4,9 +4,25 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+### Added
+
+- In a Bot's chat or a group chat, `@` lists the Bots you can mention first: a group's members and **Everyone**, or the other Bots. Picking one writes `@Name`.
+- **Reference a chat** in the composer's **+** menu adds another Bot's chat, or a recent conversation outside the team, to your message as context.
+
 ### Changed
 
+- Bots give a brief progress message when starting a multi-step task in their own chat with the user, and at meaningful milestones on long tasks.
 - Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
+- Updating a copy installed from GitHub uses the repository's current address.
+
+### Fixed
+
+- In a group chat, a conversation referenced in a message reached none of the members, and a reference whose title started with a member's name called that member. Now the members who answer the message get the referenced conversation.
+- In a group chat, typing `@` and a Bot's name and pressing Enter inserted a conversation reference instead of the Bot's name.
+- Deleting a Bot or group chat also removes its scheduled tasks, including ones left on the Bot's earlier chat parts. Before, armed tasks stayed active and kept running the deleted Session; the archive that would have stopped them was refused and the failure was silent.
+- A long conversation's fresh part keeps the Bot's model and thinking level. Before, the new part fell back to the default model.
+- A provider adapter that cannot measure tokens no longer fails every turn. The context size is estimated instead, with one warning in the log.
+- The memory panel's summary works on models that think by default. The call asks for the model's lowest thinking level, and when the answer is cut off at the output limit it is written once more with a larger budget instead of failing or being saved half-written.
 
 ### Fixed
 
@@ -80,7 +96,7 @@ If you used the legacy `dsh-bot` package, remove it before you install `ds-bot`.
 - Only one DSH can change a team at a time; a second DSH on the same DSH home opens it read-only ([Data and backups](ds-bot/README.md#data-and-backups)).
 - Group chats use many tokens: each member reads the group and answers in turn.
 
-[Unreleased]: https://github.com/FeiZhuLulu/DeepSeek-Bot/compare/v0.1.2...HEAD
-[0.1.2]: https://github.com/FeiZhuLulu/DeepSeek-Bot/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/FeiZhuLulu/DeepSeek-Bot/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/FeiZhuLulu/DeepSeek-Bot/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.1.0

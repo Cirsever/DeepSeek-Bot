@@ -2,7 +2,7 @@
 // triggered, the waiters and inboxes of group rounds, and routing a finished turn's reply.
 //
 // Turn tracking: which turns were triggered by another Bot, and what they said.
-import { REPLY_KIND, SOURCE_KIND } from './constants.js'
+import { REFERENCE_KIND, REPLY_KIND, SOURCE_KIND } from './constants.js'
 import { textOf } from './text.js'
 import { reminderText } from './schedules.js'
 
@@ -21,6 +21,16 @@ export function turnFailure(error) {
 
 export const failureLine = failure => `${failure.code}${failure.status ? ` ${failure.status}` : ''}${failure.message ? `: ${failure.message.slice(0, 200)}` : ''}`
 
+// A group's own Session never reaches a model, so the snapshot DSH prepared there
+// rides with the user's queued message to the members who answer it.
+export function attachReference(queued, source, text) {
+  const post = queued?.findLast(item => item.botId === undefined && item.kickoff !== true)
+  if (post === undefined || text === '') return
+  const labels = (Array.isArray(source?.references) ? source.references : [])
+    .map(reference => reference?.label).filter(label => typeof label === 'string' && label !== '')
+  post.references = [...(post.references ?? []), { labels, text }]
+}
+
 export function install(rt) {
   const { ctx, state } = rt
 
@@ -30,7 +40,7 @@ export function install(rt) {
   const roomWaiters = new Map()
   /** @type {Map<string, {roomId:string, replies:any[], members:string[], speaking:string|null}>} */
   const roomProgress = new Map()
-  /** @type {Map<string, {text:string, botId?:string, name?:string, reportBack?:boolean, hop?:number, kickoff?:boolean}[]>} messages a room's next relay posts */
+  /** @type {Map<string, {text:string, botId?:string, name?:string, reportBack?:boolean, hop?:number, kickoff?:boolean, references?:{labels:string[], text:string}[]}[]>} messages a room's next relay posts */
   const roomInbox = new Map()
   const queueRoomMessage = (roomId, item) => {
     roomInbox.set(roomId, [...(roomInbox.get(roomId) ?? []), item])
@@ -48,7 +58,7 @@ export function install(rt) {
   /** @type {Record<string, string>} */
   let activity = {}
   const activityOf = (tool) => {
-    if (/^(message_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(tool)) return 'sending'
+    if (/^(message_bot|interrupt_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(tool)) return 'sending'
     if (tool === 'group_relay') return 'orbit'
     if (/search|fetch|browse|browser|read|grep|glob|list/i.test(tool)) return 'searching'
     return 'working'
@@ -79,13 +89,16 @@ export function install(rt) {
   // A request whose audience is the user is answered in the recipient's own chat: that
   // turn stays visible there and its reply is not routed back to the sender.
   const answersUser = info => info.role === 'request' && info.audience === 'user'
+  // Roles whose turn owes the sender a reply: a 'stopped' notice asks the Bot to
+  // acknowledge, exactly like a request.
+  const expectsReply = info => info.role === 'request' || info.role === 'stopped'
 
   // A group Session is hidden as a whole, so its turns need no marking. A handoff
   // package that only opens a part is acknowledged with a fixed line, also hidden.
   const claimTrigger = (sessionId, entry, info) => {
     entry.info = info
     if (rt.groupOwners.has(sessionId)) return
-    if ((info.role === 'request' && !answersUser(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
+    if ((expectsReply(info) && !answersUser(info)) || info.role === 'room' || (info.role === 'handoff' && info.resume !== true)) {
       markExchangeTurn(sessionId, entry.turn)
     }
   }
@@ -177,12 +190,17 @@ export function install(rt) {
           })
         } else if (source?.kind === SOURCE_KIND && source.role === 'kickoff' && rt.roomOf(id)) {
           queueRoomMessage(id, { text: '', kickoff: true })
+        } else if (source?.kind === SOURCE_KIND && source.role === 'interrupt') {
+          // A steered interrupt neither claims the running turn nor queues as the
+          // next one's trigger: that turn's reply still belongs to its starter.
         } else if (source?.kind === SOURCE_KIND) {
           if (entry.turn !== undefined && entry.info === undefined) claimTrigger(id, entry, source)
           else entry.pending = source
         } else if (source?.kind === 'schedule' && rt.roomOf(id)) {
           // A group's scheduled task reaches the group as the user's message.
           queueRoomMessage(id, { text: reminderText(textOf(event.data.content)) })
+        } else if (source?.kind === REFERENCE_KIND && rt.roomOf(id)) {
+          attachReference(roomInbox.get(id), source, textOf(event.data.content))
         } else if (source?.kind === 'user' || source?.kind === REPLY_KIND) {
           if (rt.roomOf(id) && source.kind === 'user') {
             const text = textOf(event.data.content)
@@ -235,7 +253,7 @@ export function install(rt) {
           roomWaiters.delete(info.exchangeId)
           if (failure !== undefined) waiter?.fail(failure)
           else waiter?.resolve(reason?.kind === 'aborted' ? null : reply)
-        } else if (info.role === 'request' && !answersUser(info) && failure !== undefined) {
+        } else if (expectsReply(info) && !answersUser(info) && failure !== undefined) {
           // The sender was told a reply comes later; without this it would wait forever.
           const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
           void rt.deliver({
@@ -246,11 +264,14 @@ export function install(rt) {
             hop: (info.hop ?? 0) + 1,
             replyTo: info.exchangeId,
           }).catch(error => rt.warn('ds-bot: failure notice delivery failed: %s', error))
-        } else if (info.role === 'request' && !answersUser(info) && reply !== '') {
+        } else if (expectsReply(info) && !answersUser(info) && (reply !== '' || reason?.kind === 'aborted')) {
+          // A turn stopped before it could answer still owes the sender a line,
+          // or it would wait forever for a reply that never comes.
+          const name = rt.botOf(rt.selfOf(id))?.name ?? 'The other Bot'
           void rt.deliver({
             fromId: rt.selfOf(id),
             toId: info.senderSessionId,
-            text: reply,
+            text: reply !== '' ? reply : `${name} was stopped before it could answer your message.`,
             role: 'reply',
             hop: (info.hop ?? 0) + 1,
             replyTo: info.exchangeId,
