@@ -23,7 +23,7 @@ function start(state, { config = {}, services } = {}) {
   }
   const stop = () => {
     ctx.dispose()
-    rmSync(home, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { ctx, call, stop }
 }
@@ -40,8 +40,10 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'on agent/created',
     'effect ds-bot: identity section',
     'prompt bot-identity 640',
+    'on agent/pre-step (prepend)',
     'tool list_bots',
     'tool message_bot',
+    'tool stop_bot',
     'tool create_bot',
     'tool update_bot',
     'tool list_models',
