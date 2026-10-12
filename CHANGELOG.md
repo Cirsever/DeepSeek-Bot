@@ -17,6 +17,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ### Fixed
 
+- Bots receive the current time on their first model step and refresh it after ten minutes, even when their DSH preset does not supply a clock.
 - In a group chat, a conversation referenced in a message reached none of the members, and a reference whose title started with a member's name called that member. Now the members who answer the message get the referenced conversation.
 - In a group chat, typing `@` and a Bot's name and pressing Enter inserted a conversation reference instead of the Bot's name.
 - Deleting a Bot or group chat also removes its scheduled tasks, including ones left on the Bot's earlier chat parts. Before, armed tasks stayed active and kept running the deleted Session; the archive that would have stopped them was refused and the failure was silent.
