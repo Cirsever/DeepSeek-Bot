@@ -2,7 +2,7 @@ import { createElement as h, Fragment, useEffect, useLayoutEffect, useRef, useSt
 import { createPortal } from 'react-dom'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { inkText } from './inks.js'
-import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
+import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
 import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
@@ -106,10 +106,11 @@ function ThinkingRow({ text }) {
     h('div', { className: 'bt-think-text' }, text))
 }
 
-export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, actions }) {
+export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster(value => value)
   const data = node.data
   const steps = useTurnSteps(String(data.turn))
+  const contexts = useTurnContext(String(data.turn))
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn)
   const texts = groupPart === 'reasoning' ? [] : data.blocks.filter(block => block.kind === 'text' && block.text.trim() !== '').map(block => block.text)
   const running = data.status === 'running'
@@ -117,10 +118,26 @@ export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, us
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts.length > 0 ? { text: true } : null)
   if (hidden) return null
   const reasoning = groupPart === 'response' ? '' : turnReasoning(steps, data)
-  if (texts.length === 0 && !reasoning) return null
+  // A relay spliced mid-turn is a 'context' node, hidden from the chat flow on
+  // DSH 0.2; the step that answers it shows the event line where it was read,
+  // once, in the step's first cell.
+  const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : []
+  if (texts.length === 0 && !reasoning && relays.length === 0) return null
+  const selfId = roster.byId[sessionId]?.id ?? sessionId
   return h(Fragment, null,
+    relays.map(relay => {
+      const source = relay.source
+      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
+      return h(EventLine, {
+        key: relay.seq,
+        prefix: source.role === 'stopped' ? t('Stopped by') : source.role === 'reply' ? t('Reply from') : t('Message from'),
+        bots: [sender],
+        onOpen: () => { if (sender.id) actions.openExchange(selfId, sender.id) },
+        whole: true,
+      })
+    }),
     reasoning ? h(ThinkingRow, { text: reasoning }) : null,
-    texts.length ? h(Bubbles, { texts, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi }) : null)
+    texts.length ? h(Bubbles, { texts, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi }) : null)
 }
 
 function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
@@ -252,7 +269,7 @@ function EarlierParts({ sessionId, roster, actions }) {
         case 'event': {
           if (row.role === 'report') return h(GroupEvent, { key, prefix: t('Replies from'), room: roster.roomsById[row.roomId], name: t('a group chat'), roster, actions })
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }
-          const prefix = { stopped: t('Stopped by'), interrupt: t('Interrupt from'), reply: t('Reply from') }[row.role] ?? t('Message from')
+          const prefix = { stopped: t('Stopped by'), reply: t('Reply from') }[row.role] ?? t('Message from')
           return h(EventLine, { key, prefix, bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) }, whole: true })
         }
         default: return null
@@ -268,7 +285,10 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
   // Team state (exchanges) is keyed by the Bot id; Session state by the part shown.
   const selfId = roster.byId[sessionId]?.id ?? sessionId
   // A resumed handoff keeps the relayed message's source, but it opens a part, not a run.
-  const relayed = source.kind === 'bot' && source.handoff !== true && (source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string'
+  // A deferred request was already shown where the Bot read it mid-turn; the turn
+  // that answers it adds no second line.
+  const deferred = source.kind === 'bot' && source.deferred === true
+  const relayed = source.kind === 'bot' && source.handoff !== true && !deferred && (source.role === 'request' || source.role === 'reply' || source.role === 'stopped') && typeof source.senderSessionId === 'string'
   const turn = node.location?.turn?.turn ?? data.turn
   // Noted before paint so a folded line never flashes in before its run's first line.
   useLayoutEffect(() => {
@@ -303,7 +323,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
       // Group turns belong to the group chat; the member's own chat stays one-to-one.
       if (source.role === 'kickoff' || source.role === 'room') return null
       // The secret card itself shows what the user did; the note to the Bot stays out.
-      if (source.role === 'secret') return null
+      if (source.role === 'secret' || deferred) return null
       if (source.role === 'post') {
         const room = roster.roomsById[sessionId]
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t('a Bot'), color: 'gray' }
@@ -327,7 +347,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
         if (!bots.some(bot => bot.id === peer.id)) bots.push(peer)
       }
       return h(EventLine, {
-        prefix: source.role === 'stopped' ? t('Stopped by') : source.role === 'interrupt' ? t('Interrupt from') : count > 1 ? t('{count} messages with', { count }) : t('Message from'),
+        prefix: source.role === 'stopped' ? t('Stopped by') : count > 1 ? t('{count} messages with', { count }) : t('Message from'),
         bots,
         onOpen: bot => actions.openExchange(selfId, bot.id),
         whole: true,
@@ -459,10 +479,6 @@ function toolActivity(name, arg, findBot, self) {
       const target = findBot(arg('to'))
       return { label: target ? t('Asking {name}', { name: target.name }) : t('Asking another Bot'), state: 'sending' }
     }
-    case 'interrupt_bot': {
-      const target = findBot(arg('to'))
-      return { label: target ? t('Interrupting {name}', { name: target.name }) : t('Interrupting another Bot'), state: 'sending' }
-    }
     case 'stop_bot': {
       const target = findBot(arg('bot'))
       return { label: target ? t('Stopping {name}', { name: target.name }) : t('Stopping another Bot'), state: 'sending' }
@@ -564,11 +580,6 @@ export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
       return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
-    }
-    case 'interrupt_bot': {
-      const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
-      if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't interrupt {name}", { name: target.name }))
-      return h(EventLine, { prefix: t('Interrupted'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id), whole: true })
     }
     case 'stop_bot': {
       const target = findBot(arg('bot')) ?? { name: arg('bot') ?? '…', color: 'gray' }

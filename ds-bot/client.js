@@ -418,7 +418,6 @@ var ZH = {
   "Reply from": "收到回复：",
   "Message from": "收到消息：",
   "Stopped by": "叫停者：",
-  "Interrupt from": "收到插话：",
   "{count} messages with": "{count} 条消息，来自",
   "Routine started": "例行任务开始",
   Update: "更新",
@@ -445,8 +444,6 @@ var ZH = {
   "Checking the keys": "查看密钥",
   "Asking {name}": "询问 {name}",
   "Asking another Bot": "询问其他 Bot",
-  "Interrupting {name}": "给 {name} 插话",
-  "Interrupting another Bot": "给其他 Bot 插话",
   "Stopping {name}": "叫停 {name}",
   "Stopping another Bot": "叫停其他 Bot",
   "Creating {name}": "创建 {name}",
@@ -459,8 +456,6 @@ var ZH = {
   "{name} is typing…": "{name} 正在输入…",
   "Couldn't message {name}": "没能给 {name} 发消息",
   Messaged: "已发消息给",
-  "Couldn't interrupt {name}": "没能给 {name} 插话",
-  Interrupted: "已插话",
   "Couldn't stop {name}": "没能叫停 {name}",
   Stopped: "已叫停",
   Created: "已创建",
@@ -1416,6 +1411,30 @@ function toolArgs(root) {
     },
     value: (key) => object()?.[key]
   };
+}
+var RELAY_ROLES = /* @__PURE__ */ new Set(["request", "reply", "stopped"]);
+var isRelayContext = (data) => {
+  const source = data?.source;
+  if (source === null || typeof source !== "object" || source.kind !== "bot" || source.handoff === true || source.deferred === true) return false;
+  return RELAY_ROLES.has(source.role) && typeof source.senderSessionId === "string";
+};
+var stepShows = (step) => (step?.blocks ?? []).some((block) => {
+  if (block === void 0 || block.kind === "tool-call") return false;
+  return block.kind === "text" || block.kind === "reasoning" ? String(block.text ?? "").trim() !== "" : true;
+});
+var stepHasReasoning = (step) => (step?.blocks ?? []).some((block) => block?.kind === "reasoning" && String(block.text ?? "").trim() !== "");
+var relayPart = (data, groupPart) => groupPart === void 0 || (stepHasReasoning(data) ? groupPart === "reasoning" : groupPart === "response");
+function relaysBefore(contexts, steps, step) {
+  const index = steps.findIndex((entry) => entry?.step === step?.step);
+  if (index === -1) return [];
+  let prev = -Infinity;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (stepShows(steps[cursor])) {
+      prev = steps[cursor].time;
+      break;
+    }
+  }
+  return (contexts ?? []).filter((data) => isRelayContext(data) && typeof data.time === "number" && data.time >= prev && data.time < step.time);
 }
 function commRunOf(order, peers, turn, hiddenTurns = []) {
   const turns = [];
@@ -2693,7 +2712,7 @@ function installCompiledStyles(text, tag) {
 var import_react2 = require("react");
 var STATES = ["idle", "thinking", "searching", "working", "sending", "orbit", "alert", "done"];
 var botState = (running, activity, alert) => running ? STATES.includes(activity) ? activity : "working" : alert ? "alert" : "idle";
-var toolState = (name) => /^(message_bot|interrupt_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
+var toolState = (name) => /^(message_bot|stop_bot|create_bot|update_bot|create_group|update_group|delete_group|post_to_group)$/.test(name) ? "sending" : /search|fetch|browse|read|grep|glob|list|recall/i.test(name) ? "searching" : "working";
 function useGaze(ref, enabled) {
   (0, import_react2.useEffect)(() => {
     if (!enabled) return void 0;
@@ -3726,22 +3745,38 @@ function ThinkingRow({ text }) {
     (0, import_react6.createElement)("div", { className: "bt-think-text" }, text)
   );
 }
-function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, actions }) {
+function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, useTurnSteps, useTurnContext, actions }) {
   const roster = useRoster((value) => value);
   const data = node.data;
   const steps = useTurnSteps(String(data.turn));
+  const contexts = useTurnContext(String(data.turn));
   const hidden = Boolean(roster.roomsById[sessionId]) || isHiddenTurn(roster, sessionId, data.turn);
   const texts2 = groupPart === "reasoning" ? [] : data.blocks.filter((block) => block.kind === "text" && block.text.trim() !== "").map((block) => block.text);
   const running = data.status === "running";
   useLiveNote(actions, sessionId, `text:${node.key ?? data.seq}`, !hidden && running && texts2.length > 0 ? { text: true } : null);
   if (hidden) return null;
   const reasoning = groupPart === "response" ? "" : turnReasoning(steps, data);
-  if (texts2.length === 0 && !reasoning) return null;
+  const relays = relayPart(data, groupPart) ? relaysBefore(contexts, steps, data) : [];
+  if (texts2.length === 0 && !reasoning && relays.length === 0) return null;
+  const selfId = roster.byId[sessionId]?.id ?? sessionId;
   return (0, import_react6.createElement)(
     import_react6.Fragment,
     null,
+    relays.map((relay) => {
+      const source = relay.source;
+      const sender = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
+      return (0, import_react6.createElement)(EventLine, {
+        key: relay.seq,
+        prefix: source.role === "stopped" ? t("Stopped by") : source.role === "reply" ? t("Reply from") : t("Message from"),
+        bots: [sender],
+        onOpen: () => {
+          if (sender.id) actions.openExchange(selfId, sender.id);
+        },
+        whole: true
+      });
+    }),
     reasoning ? (0, import_react6.createElement)(ThinkingRow, { text: reasoning }) : null,
-    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
+    texts2.length ? (0, import_react6.createElement)(Bubbles, { texts: texts2, roster, selfId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ""}`, useUi }) : null
   );
 }
 function EventLine({ prefix, bots, joiner = t("and"), onOpen, whole = false }) {
@@ -3896,7 +3931,7 @@ function EarlierParts({ sessionId, roster, actions }) {
         case "event": {
           if (row.role === "report") return (0, import_react6.createElement)(GroupEvent, { key, prefix: t("Replies from"), room: roster.roomsById[row.roomId], name: t("a group chat"), roster, actions });
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t("a Bot"), color: "gray" };
-          const prefix = { stopped: t("Stopped by"), interrupt: t("Interrupt from"), reply: t("Reply from") }[row.role] ?? t("Message from");
+          const prefix = { stopped: t("Stopped by"), reply: t("Reply from") }[row.role] ?? t("Message from");
           return (0, import_react6.createElement)(EventLine, { key, prefix, bots: [other], onOpen: () => {
             if (selfId && other.id) actions.openExchange(selfId, other.id);
           }, whole: true });
@@ -3913,7 +3948,8 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
   const data = node.data;
   const source = data.source !== null && typeof data.source === "object" ? data.source : {};
   const selfId = roster.byId[sessionId]?.id ?? sessionId;
-  const relayed = source.kind === "bot" && source.handoff !== true && (source.role === "request" || source.role === "reply" || source.role === "stopped") && typeof source.senderSessionId === "string";
+  const deferred = source.kind === "bot" && source.deferred === true;
+  const relayed = source.kind === "bot" && source.handoff !== true && !deferred && (source.role === "request" || source.role === "reply" || source.role === "stopped") && typeof source.senderSessionId === "string";
   const turn = node.location?.turn?.turn ?? data.turn;
   (0, import_react6.useLayoutEffect)(() => {
     if (relayed) actions.noteTurnPeer(sessionId, turn, source.senderSessionId);
@@ -3939,7 +3975,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
     if (source.kind === "bot") {
       if (source.handoff === true) return roster.roomsById[sessionId] ? null : (0, import_react6.createElement)(EarlierParts, { sessionId, roster, actions });
       if (source.role === "kickoff" || source.role === "room") return null;
-      if (source.role === "secret") return null;
+      if (source.role === "secret" || deferred) return null;
       if (source.role === "post") {
         const room2 = roster.roomsById[sessionId];
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
@@ -3962,7 +3998,7 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
         if (!bots.some((bot) => bot.id === peer.id)) bots.push(peer);
       }
       return (0, import_react6.createElement)(EventLine, {
-        prefix: source.role === "stopped" ? t("Stopped by") : source.role === "interrupt" ? t("Interrupt from") : count > 1 ? t("{count} messages with", { count }) : t("Message from"),
+        prefix: source.role === "stopped" ? t("Stopped by") : count > 1 ? t("{count} messages with", { count }) : t("Message from"),
         bots,
         onOpen: (bot) => actions.openExchange(selfId, bot.id),
         whole: true
@@ -4084,10 +4120,6 @@ function toolActivity(name, arg, findBot, self2) {
     case "message_bot": {
       const target = findBot(arg("to"));
       return { label: target ? t("Asking {name}", { name: target.name }) : t("Asking another Bot"), state: "sending" };
-    }
-    case "interrupt_bot": {
-      const target = findBot(arg("to"));
-      return { label: target ? t("Interrupting {name}", { name: target.name }) : t("Interrupting another Bot"), state: "sending" };
     }
     case "stop_bot": {
       const target = findBot(arg("bot"));
@@ -4216,11 +4248,6 @@ function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
       const target = findBot(arg("to")) ?? { name: arg("to") ?? "…", color: "gray" };
       if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't message {name}", { name: target.name }));
       return (0, import_react6.createElement)(EventLine, { prefix: t("Messaged"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true });
-    }
-    case "interrupt_bot": {
-      const target = findBot(arg("to")) ?? { name: arg("to") ?? "…", color: "gray" };
-      if (done && root.isError) return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Couldn't interrupt {name}", { name: target.name }));
-      return (0, import_react6.createElement)(EventLine, { prefix: t("Interrupted"), bots: [target], onOpen: (bot) => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id), whole: true });
     }
     case "stop_bot": {
       const target = findBot(arg("bot")) ?? { name: arg("bot") ?? "…", color: "gray" };
@@ -12895,6 +12922,11 @@ function apply(ctx) {
         const snapshot = chat.getSnapshot();
         if (snapshot === void 0) throw new Error("ds-bot: Chat target is unavailable");
         return snapshot.nodes.turnDataSource(Number(turn), "assistant-step");
+      },
+      turnContext: (turn) => {
+        const snapshot = chat.getSnapshot();
+        if (snapshot === void 0) throw new Error("ds-bot: Chat target is unavailable");
+        return snapshot.nodes.turnDataSource(Number(turn), "context");
       }
     } };
   };

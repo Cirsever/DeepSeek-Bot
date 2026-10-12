@@ -8,9 +8,11 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 - In a Bot's chat or a group chat, `@` lists the Bots you can mention first: a group's members and **Everyone**, or the other Bots. Picking one writes `@Name`.
 - **Reference a chat** in the composer's **+** menu adds another Bot's chat, or a recent conversation outside the team, to your message as context.
+- A Main Bot can stop another Bot's running turn. The Bot is told why, and its reply goes back to the Main Bot.
 
 ### Changed
 
+- When a Bot messages another Bot that is working, the message reaches it at its next step instead of waiting until its current work is done. It answers once that work is done, and the reply comes back. A Bot can still queue a separate task behind the current work.
 - Bots give a brief progress message when starting a multi-step task in their own chat with the user, and at meaningful milestones on long tasks.
 - Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
 - Updating a copy installed from GitHub uses the repository's current address.
