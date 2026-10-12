@@ -8,6 +8,10 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 - Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
 
+### Fixed
+
+- A message sent to a group chat while a round is running shows at once and joins that round instead of waiting for it to end.
+
 ## [0.1.2] - 2026-10-11
 
 ### Added

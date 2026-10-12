@@ -180,11 +180,50 @@ export function install(rt) {
     return stripOwnName(member.name, String(reply ?? '').trim())
   }
 
+  // A called member moves up if it is still waiting, or gets one more turn if it
+  // already spoke; either way it goes right after this slot. `cap` is the caller's
+  // per-member turn bound for the round.
+  function callMembers(room, round, turns, index, callees, callerName, cap) {
+    let next = index + 1
+    for (const peer of callees) {
+      if ((turns.get(peer.id) ?? 0) >= cap) continue
+      const waiting = round.slots.findIndex((other, at) => at > index && other.id === peer.id && other.status === 'waiting')
+      const called = waiting === -1 ? { id: peer.id, name: peer.name, status: 'waiting' } : round.slots.splice(waiting, 1)[0]
+      called.note = `${callerName} mentioned you`
+      round.slots.splice(next, 0, called)
+      next += 1
+    }
+  }
+
+  // Messages the user sent while this round is running post into the log between
+  // speakers, so the members still to speak see them; a member they @ is called
+  // right after this slot, as if the admin had called it.
+  function drainRoomInbox(room, round, turns, index) {
+    const fresh = (rt.roomInbox.get(room.id) ?? [])
+      .filter(item => item.early === true && item.posted !== true && item.consumed !== true)
+    if (fresh.length === 0) return
+    const others = room.members.map(rt.botOf).filter(Boolean)
+    for (const item of fresh) {
+      item.posted = true
+      appendRoom(room, { who: 'User', text: item.text })
+      round.replies.push({ kind: 'user', text: item.text, time: Date.now() })
+      const { all, found } = mentionsIn(item.text, others)
+      const callees = all ? [...found, ...others.filter(other => !found.includes(other))] : found
+      // The member next to speak is still waiting on this slot, not past it: a call
+      // for it is a note on its own slot, not an extra turn.
+      const next = round.slots[index]
+      if (next?.status === 'waiting' && callees.some(peer => peer.id === next.id)) next.note = 'the user mentioned you'
+      callMembers(room, round, turns, index, callees.filter(peer => peer.id !== next?.id), 'the user', ROOM_ADMIN_TURNS_EACH)
+    }
+    void rt.save()
+  }
+
   async function runRound(room, round, signal) {
     const limit = round.slots.length + ROOM_EXTRA_TURNS + (room.admin ? ROOM_ADMIN_EXTRA_TURNS : 0)
     const turns = new Map()
     for (let index = 0; index < round.slots.length && round.turns < limit; index += 1) {
       if (signal.aborted) break
+      drainRoomInbox(room, round, turns, index)
       const slot = round.slots[index]
       const member = rt.botOf(slot.id)
       // Settings may change mid-round, for example when the admin removes someone.
@@ -228,22 +267,12 @@ export function install(rt) {
       appendRoom(room, { who: member.name, botId: member.id, text: reply })
       round.replies.push({ botId: member.id, name: member.name, color: member.color, text: reply, time: Date.now() })
       void rt.save()
-      // A called member moves up if it is still waiting, or gets one more turn if it
-      // already spoke; either way it goes right after this speaker. Only the admin's
-      // "@all" calls everyone, so a member cannot set off a storm.
+      // Only the admin's "@all" calls everyone, so a member cannot set off a storm.
       const leads = rt.isAdminOf(room, member.id)
       const others = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
       const { all, found } = mentionsIn(reply, others)
       const callees = leads && all ? [...found, ...others.filter(other => !found.includes(other))] : found
-      let next = index + 1
-      for (const peer of callees) {
-        if ((turns.get(peer.id) ?? 0) >= (leads ? ROOM_ADMIN_TURNS_EACH : ROOM_TURNS_EACH)) continue
-        const waiting = round.slots.findIndex((other, at) => at > index && other.id === peer.id && other.status === 'waiting')
-        const called = waiting === -1 ? { id: peer.id, name: peer.name, status: 'waiting' } : round.slots.splice(waiting, 1)[0]
-        called.note = `${member.name} mentioned you`
-        round.slots.splice(next, 0, called)
-        next += 1
-      }
+      callMembers(room, round, turns, index, callees, member.name, leads ? ROOM_ADMIN_TURNS_EACH : ROOM_TURNS_EACH)
     }
   }
 
@@ -261,7 +290,15 @@ export function install(rt) {
       // Session folds into one turn are not lost; the newest one picks the speakers.
       const queued = rt.roomInbox.get(room.id) ?? []
       rt.roomInbox.delete(room.id)
-      const posts = queued.length > 0 ? queued : [{ text: '' }]
+      // Queued copies of messages a running round already posted, or recorded for it
+      // and never drained, arrive with the next turn: the posted ones open no round,
+      // and a turn that brings nothing new closes without one.
+      const fresh = queued.filter(post => post.consumed !== true && post.posted !== true)
+      if (queued.length > 0 && fresh.length === 0) {
+        exec.concludeTurn?.()
+        return JSON.stringify({ replies: [], passed: [] })
+      }
+      const posts = fresh.length > 0 ? fresh : [{ text: '' }]
       const startSeq = room.seq + 1
       // The opening greeting is a cue for the admin, not a line of the group.
       for (const post of posts.filter(item => !item.kickoff)) {
