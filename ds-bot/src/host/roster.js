@@ -347,7 +347,10 @@ export function install(rt) {
     delete state.rooms[id]
     rt.roomInbox.delete(id)
     await rt.save()
-    await ctx.workspaceRegistry.archiveSession(id).catch(() => {})
+    // Armed scheduled tasks refuse a plain archive and would keep delivering into
+    // the deleted group; the session-stop that stopActivity runs removes them.
+    await ctx.workspaceRegistry.archiveSession(id, { stopActivity: true })
+      .catch(error => rt.warn('ds-bot: group chat %s not archived: %s', room.name, error))
   }
 
   // The first Main Bot is the sidebar tile. `replace` gives a Main Bot's place to
@@ -382,13 +385,14 @@ export function install(rt) {
   }
 
   async function deleteBot(id) {
-    if (rt.botOf(id) === undefined) throw new Error('Unknown Bot')
+    const bot = rt.botOf(id)
+    if (bot === undefined) throw new Error('Unknown Bot')
     if (rt.isMain(id)) throw new Error('A Main Bot cannot be deleted; remove its Main Bot role first')
     // Before the Bot and its group Sessions leave the state, which the archive reads.
     const archived = rt.archiveBotMemory(id)
     const current = rt.chatOf(id)
     // Questions and exchange turns are kept per Session, so every part of the chat is cleared.
-    const parts = new Set([id, current, ...(rt.botOf(id).segments ?? []).map(segment => segment.sessionId)])
+    const parts = new Set([id, current, ...(bot.segments ?? []).map(segment => segment.sessionId)])
     delete state.bots[id]
     for (const part of parts) {
       delete state.questions[part]
@@ -406,7 +410,13 @@ export function install(rt) {
     await rt.forgetBotSecrets(id)
     await archived
     await rt.save()
-    await ctx.workspaceRegistry.archiveSession(current).catch(() => {})
+    // Same as deleteRoom: stopActivity removes the Session's armed scheduled tasks.
+    // Past parts are archived too: a part move can leave tasks on the old Session,
+    // which otherwise stays armed and invisible. Already-archived ids are a no-op.
+    for (const part of parts) {
+      await ctx.workspaceRegistry.archiveSession(part, { stopActivity: true })
+        .catch(error => rt.warn('ds-bot: Bot %s not archived: %s', bot.name, error))
+    }
   }
 
   async function bootstrap() {
