@@ -68,9 +68,10 @@ export function install(rt) {
   })
   // What changes without a new revision, sent with every state answer. `memoryNews`:
   // per Bot, its latest memory change; `memoryReviews`: memory reviews waiting or
-  // running.
+  // running; `work`: per Bot, the turn it runs and its tool, and the approvals waiting.
   const live = () => ({
     activity: rt.activityView(),
+    work: { bots: rt.workView(), approvals: rt.approvalsView() },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
     connectors: rt.connectorsView(),
@@ -78,7 +79,7 @@ export function install(rt) {
   })
   // What a host that only reads the team may still answer.
   // Updates change the dsh profile, not the team, so a reading host may run them too.
-  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars'])
+  const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer'])
 
   function setPrefs(body) {
     if (body.theme !== undefined) {
@@ -203,6 +204,9 @@ export function install(rt) {
           await rt.load()
           await rt.deleteRoom(body.id)
           return ok(view())
+        case 'approval-answer':
+          rt.answerApproval(body.id, body.choice)
+          return ok(true)
         case 'dismiss-question':
           await rt.load()
           if (state.questions[body.sessionId] !== undefined) {

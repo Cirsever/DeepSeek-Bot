@@ -12,7 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { ROOM_REPLY_TIMEOUT_MS, SOURCE_KIND } from './constants.js'
+import { ROOM_BOT_ROUNDS, ROOM_REPLY_TIMEOUT_MS, SOURCE_KIND } from './constants.js'
 import { escapeRegExp, splitRef, textOf } from './text.js'
 import { mentionSpans } from '../shared/mentions.js'
 import { GROUP_REF, output } from './tools.js'
@@ -83,6 +83,7 @@ const slotLabel = (slot) => {
   if (slot.status === 'posted') return `${slot.name} (posted)`
   if (slot.status === 'passed') return `${slot.name} (passed)`
   if (slot.status === 'missed') return `${slot.name} (no answer)`
+  if (slot.status === 'waiting-approval') return `${slot.name} (waiting for the user's approval; posts when done)`
   if (slot.status === 'failed') return `${slot.name} (could not answer: error)`
   if (slot.status === 'left') return `${slot.name} (left the group)`
   return slot.name
@@ -156,31 +157,54 @@ export function install(rt) {
   }
 
   // One member turn inside the room; resolves to its final text, `{ failure }` when its
-  // model call failed, or null when it did not answer in time or the round was stopped.
-  async function roomTurn(room, member, sessionId, text, note, signal) {
+  // model call failed, `{ missed }` when it went quiet for too long, `{ approval }` when
+  // it waits for the user's approval, or null when the round was stopped. The wait
+  // restarts on each event of the member's Session, so a member at work is never cut off.
+  async function roomTurn(room, member, sessionId, text, note, signal, started) {
     if (signal.aborted) return null
     const exchangeId = randomUUID()
+    const turn = { botId: member.id, sessionId, exchangeId }
+    started.push(turn)
     room.seen[member.id] = room.seq
     const done = new Promise((resolve) => {
+      let timer
       const finish = (value) => {
         clearTimeout(timer)
         rt.roomWaiters.delete(exchangeId)
         resolve(value)
       }
-      const timer = setTimeout(() => finish(null), ROOM_REPLY_TIMEOUT_MS)
-      rt.roomWaiters.set(exchangeId, { resolve: finish, fail: failure => finish({ failure }) })
+      const touch = () => {
+        clearTimeout(timer)
+        timer = setTimeout(() => finish({ missed: true }), ROOM_REPLY_TIMEOUT_MS)
+      }
+      touch()
+      rt.roomWaiters.set(exchangeId, { sessionId, botId: member.id, roomId: room.id, resolve: finish, fail: failure => finish({ failure }), touch, approval: () => finish({ approval: true }) })
       signal.addEventListener('abort', () => finish(null), { once: true })
     })
     try {
       await rt.deliver({ fromId: undefined, toId: member.id, sessionId, role: 'room', roomId: room.id, exchangeId, note, text })
+      // Still held by an earlier request: this turn cannot start until the user answers.
+      if (rt.waitsForApproval?.(sessionId)) rt.roomWaiters.get(exchangeId)?.approval()
     } catch (error) {
       rt.warn('ds-bot: group delivery to %s failed: %s', member.name, error)
       rt.roomWaiters.get(exchangeId)?.resolve(null)
     }
     const reply = await done
-    if (reply === null || reply?.failure !== undefined) return reply
+    // A turn that ended leaves nothing for a stop to cancel.
+    if (typeof reply === 'string' || reply?.failure !== undefined) started.splice(started.indexOf(turn), 1)
+    if (reply === null || typeof reply === 'object') return reply
     return stripOwnName(member.name, String(reply ?? '').trim())
   }
+
+  // A member that reaches its context limit mid-turn goes on in a fresh Session, so a
+  // waiter is also found by the member and group that Session now speaks for.
+  const waitersOf = (sessionId) => {
+    const owner = rt.groupOwners.get(sessionId)
+    return [...rt.roomWaiters.values()].filter(waiter => waiter.sessionId === sessionId
+      || (owner !== undefined && waiter.botId === owner.botId && waiter.roomId === owner.roomId))
+  }
+  rt.touchRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.touch() }
+  rt.yieldRoomTurn = (sessionId) => { for (const waiter of waitersOf(sessionId)) waiter.approval() }
 
   // A called member moves up if it is still waiting, or gets one more turn if it
   // already spoke; either way it goes right after slot `index`. `cap` is the caller's
@@ -272,7 +296,7 @@ export function install(rt) {
       const prompt = roomPrompt(room, member, round)
       round.shown?.push(member.id)
       const text = session.brief === undefined ? prompt : `${session.brief}\n\n${prompt}`
-      const reply = await roomTurn(room, member, session.id, text, slot.note ?? 'your turn', signal)
+      const reply = await roomTurn(room, member, session.id, text, slot.note ?? 'your turn', signal, round.started)
       round.speaking = null
       if (reply?.failure !== undefined) {
         // Not a pass: the user sees why the member is silent, and the round goes on.
@@ -282,9 +306,16 @@ export function install(rt) {
         round.replies.push({ kind: 'failed', botId: member.id, name: member.name, color: member.color, code, ...(status ? { status } : {}), text: message, time: Date.now() })
         continue
       }
-      if (reply === null || isPass(reply)) {
-        slot.status = reply === null ? 'missed' : 'passed'
+      // The member's turn goes on in the background and posts when it ends.
+      if (reply?.approval) {
+        slot.status = 'waiting-approval'
+        round.replies.push({ kind: 'approval', botId: member.id, name: member.name, color: member.color, time: Date.now() })
+        continue
+      }
+      if (reply === null || reply?.missed || isPass(reply)) {
+        slot.status = typeof reply === 'string' ? 'passed' : 'missed'
         round.passed.push(member.name)
+        if (reply?.missed) round.replies.push({ kind: 'missed', botId: member.id, name: member.name, color: member.color, time: Date.now() })
         continue
       }
       slot.status = 'posted'
@@ -318,8 +349,9 @@ export function install(rt) {
       rt.roomInbox.delete(room.id)
       const posts = queued.length > 0 ? queued : [{ text: '' }]
       const startSeq = room.seq + 1
-      // The opening greeting is a cue for the admin, not a line of the group.
-      for (const post of posts.filter(item => !item.kickoff)) {
+      // The opening greeting is a cue for the admin, not a line of the group; a member's
+      // late failure is an event of the round.
+      for (const post of posts.filter(item => !item.kickoff && !item.failed)) {
         // Image readings go into the log only; `@` names are picked from what the user typed.
         const text = post.images === undefined ? post.text : [post.text, ...await rt.imagesForGroup(post.images, room.id)].filter(Boolean).join('\n')
         appendRoom(room, post.botId
@@ -342,6 +374,13 @@ export function install(rt) {
         replies: [],
         passed: [],
         failed: [],
+        started: [],
+      }
+      for (const post of posts.filter(item => item.failed)) {
+        const bot = rt.botOf(post.botId)
+        const { code, status, message } = post.failed
+        round.failed.push(bot?.name ?? post.name)
+        round.replies.push({ kind: 'failed', botId: post.botId, name: bot?.name ?? post.name, color: bot?.color, code, ...(status ? { status } : {}), text: message, time: Date.now() })
       }
       rt.roomProgress.set(exec.callId, round)
       try {
@@ -350,6 +389,9 @@ export function install(rt) {
         rt.warn('ds-bot: group round in %s stopped: %s', room.name, error)
       } finally {
         rt.roomProgress.delete(exec.callId)
+      }
+      if (exec.signal?.aborted) {
+        for (const turn of round.started) void rt.stopRoomTurn?.(room.sessions?.[turn.botId] ?? turn.sessionId, turn.exchangeId)
       }
       await rt.save()
       for (const post of posts) {
@@ -440,12 +482,57 @@ export function install(rt) {
     const members = everyone.filter(bot => bot.id !== opener.botId)
     const admin = members.find(bot => rt.isAdminOf(room, bot.id))
     if (opener.kickoff) return admin ? [admin] : []
+    if (opener.quiet) return []
     const { all, found: named } = mentionsIn(opener.text, everyone, opener.references)
     const found = named.filter(bot => bot.id !== opener.botId)
+    if (opener.late) return found.length > 0 ? found : admin ? [admin] : []
     if (found.length > 0 && !all) return found
     if (!all && room.mode === 'admin' && admin) return [admin]
     return admin ? [admin, ...members.filter(bot => bot !== admin)] : members
   }
+
+  // A Bot's message into the group's own Session, which relays it as a new round.
+  async function postToRoom(room, sender, text, extra = {}) {
+    const agent = await rt.resolveAgent(room.id)
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text: `[Group post from ${sender.name}]\n${text}` }],
+      source: { kind: SOURCE_KIND, form: 'relay', role: 'post', exchangeId: randomUUID(), senderName: sender.name, senderSessionId: sender.id, roomId: room.id, hop: 0, ...extra },
+    }))
+    await ctx.sessions.flush(agent.session)
+  }
+  rt.postToRoom = postToRoom
+
+  // A member the round moved on from (it went quiet or waited for an approval) posts
+  // what its turn ended with. Only the admin and anyone it names answer, and past the
+  // Bot round limit nobody does, so late posts cannot keep a group talking.
+  async function lateRoomReply(sessionId, info, reply) {
+    const owner = rt.groupOwners.get(sessionId)
+    const room = rt.roomOf(owner?.roomId ?? info.roomId)
+    const member = rt.botOf(owner?.botId)
+    if (room === undefined || member === undefined || !room.members.includes(member.id)) return
+    const text = stripOwnName(member.name, reply)
+    if (isPass(text)) return
+    const quiet = (room.botRounds ?? 0) >= ROOM_BOT_ROUNDS
+    if (!quiet) room.botRounds = (room.botRounds ?? 0) + 1
+    await rt.save()
+    await postToRoom(room, member, text, { late: true, ...(quiet ? { quiet: true } : {}) })
+      .catch(error => rt.warn('ds-bot: late group reply from %s failed: %s', member.name, error))
+  }
+  rt.lateRoomReply = lateRoomReply
+
+  // The round said such a member posts when done; a failed model call is how it ended.
+  // Nobody answers it.
+  async function lateRoomFailure(sessionId, info, failure) {
+    const owner = rt.groupOwners.get(sessionId)
+    const room = rt.roomOf(owner?.roomId ?? info.roomId)
+    const member = rt.botOf(owner?.botId)
+    if (room === undefined || member === undefined || !room.members.includes(member.id)) return
+    const { code, status, message } = failure
+    await postToRoom(room, member, `Could not finish: its model call failed (${failureLine(failure)}).`, {
+      late: true, quiet: true, failed: { code, ...(status ? { status } : {}), message },
+    }).catch(error => rt.warn('ds-bot: late group failure from %s failed: %s', member.name, error))
+  }
+  rt.lateRoomFailure = lateRoomFailure
 
   // A group the user just made opens with its admin asking what the group is for.
   async function greetRoom(roomId) {
@@ -462,8 +549,10 @@ export function install(rt) {
 
   async function reportRound(room, post, round) {
     const lines = round.replies.filter(reply => reply.kind === undefined).map(reply => `${reply.name}: ${reply.text}`)
+    const waiting = round.replies.filter(reply => reply.kind === 'approval').map(reply => reply.name)
     const text = [
       lines.length > 0 ? `Replies to your post (oldest first):\n${lines.join('\n')}` : 'Nobody replied to your post.',
+      waiting.length > 0 ? `Waiting for the user's approval: ${waiting.join(', ')}. What they say afterwards is posted in the group, not sent to you; read_group_chat shows it.` : '',
       round.passed.length > 0 ? `Stayed silent: ${round.passed.join(', ')}.` : '',
       round.failed.length > 0 ? `Could not answer because their model call failed: ${round.replies.filter(reply => reply.kind === 'failed').map(reply => `${reply.name} (${failureLine({ code: reply.code, status: reply.status, message: reply.text })})`).join(', ')}.` : '',
     ].filter(Boolean).join('\n\n')
