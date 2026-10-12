@@ -254,7 +254,7 @@ export function install(rt) {
     }
     // The user spoke in this room, so Bots may start their own rounds again.
     room.botRounds = 0
-    void rt.save()
+    void rt.save().catch(() => {})
     return round.slots.length - before
   }
 
@@ -310,7 +310,7 @@ export function install(rt) {
       slot.status = 'posted'
       appendRoom(room, { who: member.name, botId: member.id, text: reply })
       round.replies.push({ botId: member.id, name: member.name, color: member.color, text: reply, time: Date.now() })
-      void rt.save()
+      void rt.save().catch(() => {})
       // Only the admin's "@all" calls everyone, so a member cannot set off a storm.
       const leads = rt.isAdminOf(room, member.id)
       const others = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
@@ -407,7 +407,7 @@ export function install(rt) {
         for (const round of rt.roomProgress.values()) {
           if (round.roomId === room.id) round.replies.push({ kind: 'lookup', botId: member.id, name: member.name, color: member.color, text, time: Date.now() })
         }
-        void rt.save()
+        void rt.save().catch(() => {})
       }
       const partsNote = parts.length > 1 ? `\n\nYour own chat has ${parts.length} parts: ${rt.partIndex(parts)}. Call read_own_chat with part N for the note that closed an earlier part, or with words to search all parts.` : ''
       if (query === '' && around !== '') {
