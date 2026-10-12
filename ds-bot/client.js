@@ -4165,6 +4165,13 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
     { className: "bt-group-replies" },
     replies.map((reply, index) => {
       const bot = roster.byId[reply.botId] ?? { id: reply.botId, name: reply.name, color: reply.color ?? "gray" };
+      if (reply.kind === "user") {
+        return (0, import_react6.createElement)("div", { key: `user-${index}`, className: "bt-urow" }, (0, import_react6.createElement)(
+          "div",
+          { className: "bt-ububble" },
+          (0, import_react6.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: reply.text, labels: mdLabels(), variant: "compact" })
+        ));
+      }
       if (reply.kind === "failed") {
         return (0, import_react6.createElement)(
           "div",

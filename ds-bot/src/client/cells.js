@@ -524,6 +524,10 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
   return h('div', { className: 'bt-group-replies' },
     replies.map((reply, index) => {
       const bot = roster.byId[reply.botId] ?? { id: reply.botId, name: reply.name, color: reply.color ?? 'gray' }
+      if (reply.kind === 'user') {
+        return h('div', { key: `user-${index}`, className: 'bt-urow' }, h('div', { className: 'bt-ububble' },
+          h(MarkdownText, { text: reply.text, labels: mdLabels(), variant: 'compact' })))
+      }
       if (reply.kind === 'failed') {
         return h('div', { key: `${reply.botId}-${index}`, className: 'bt-event bt-event-error', role: 'status', title: [reply.code, reply.status, reply.text].filter(Boolean).join(' · ') },
           t('{name} could not answer: {reason}', { name: bot.name, reason: failureLabel(reply.code, reply.text) }))
