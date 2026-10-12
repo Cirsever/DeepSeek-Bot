@@ -8,6 +8,10 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 - Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
 
+### Fixed
+
+- #73: Offload images from completed turns and move on when a model request keeps failing.
+
 ## [0.1.2] - 2026-10-11
 
 ### Added

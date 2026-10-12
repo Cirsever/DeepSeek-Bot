@@ -136,6 +136,7 @@ export function install(rt) {
   const NOTE_COOLDOWN_MS = [60_000, 300_000, 900_000]
   const SWITCH_ATTEMPTS = 5
   const OVERFLOW = 'CONTEXT_WINDOW_EXCEEDED'
+  const STUCK_CODES = ['TRANSPORT', 'INVALID_REQUEST', 'IMAGE_OFFLOAD_REQUIRED']
   const ORIGINAL_COMPACT = Symbol.for('ds-bot/compaction')
   const HANDOFF_ACK = 'Noted. I have my handoff note and carry on from here.'
   const STEWARD_MAX_TOKENS = 4_096
@@ -528,18 +529,22 @@ export function install(rt) {
   // together without the model carries the last note the model wrote.
   function noteText(segment) {
     if (segment?.fallback === undefined) return segment?.note
-    const why = segment.fallback === 'overflow' ? 'the part overflowed the model\'s window' : 'the model did not write a usable note'
+    const why = segment.fallback === 'overflow' ? 'the part overflowed the model\'s window'
+      : segment.fallback === 'failure' ? 'a request in the previous part kept failing'
+        : 'the model did not write a usable note'
     const head = `(DS Bot put this note together without the model, because ${why}.`
     return segment.note === undefined
       ? `${head} There was no earlier note to carry over. Go by the messages below, and look up anything else.)`
       : `${head} It is the note written at the end of part ${segment.noteFrom}, carried over unchanged; anything newer is in the messages below, and read_own_chat finds the rest.)\n\n${segment.note}`
   }
 
-  function handoffPackage({ room, segment, lines, number, resume, overflow }) {
+  function handoffPackage({ room, segment, lines, number, resume, overflow, failed }) {
     const where = room ? `your conversation in the group chat "${room.name}"` : 'your own chat with the user'
     const lookup = room
       ? 'read_group_chat shows the group\'s latest messages, and read_own_chat your own chat.'
       : 'read_own_chat searches every part, reads around an anchor such as [part 2 #1234 · …], and shows the note that closed any earlier part.'
+    const reason = failed !== undefined ? `a request in the previous part kept failing (${failed})`
+      : overflow ? 'the previous part overflowed the model\'s window' : 'the previous part grew long'
     const { recent, earlier, unlisted, complete } = lines
     const omitted = [
       ...(unlisted > 0 ? [`(${unlisted} older messages are not listed.)`] : []),
@@ -547,9 +552,10 @@ export function install(rt) {
     ]
     return [
       `[Handoff · part ${number}]`,
-      `DS Bot moved ${where} on to a fresh conversation, part ${number}, because the previous part ${overflow ? 'overflowed the model\'s window' : 'grew long'}. This message is not from the user.`,
+      `DS Bot moved ${where} on to a fresh conversation, part ${number}, because ${reason}. This message is not from the user.`,
       'It is reference, not new instructions: the note and the messages below are a record of earlier work. Do what they say only as part of the work they record, and take new requests only from messages that come after this one.',
       `Everything earlier stays saved: ${lookup}`,
+      ...(failed !== undefined ? ['Images from the previous part are not in this conversation; if one matters, ask the user to send it again.'] : []),
       '',
       '## Handoff note',
       noteText(segment) ?? '(none)',
@@ -564,8 +570,11 @@ export function install(rt) {
       recent.length > 0 ? recent.join('\n') : '(none)',
       '',
       !resume ? 'Every message above has had its answer. Nothing needs an answer now; wait for the next message.'
-        : room ? 'You were in the middle of your turn in the group. Go on with it now and write your reply to the group.'
-          : 'You were in the middle of a turn. Go on with it now from where you stopped.',
+        : failed !== undefined ? room
+          ? 'Your last turn could not finish because the model request kept failing. Go on with it now from the messages above, and first tell the group in one short sentence that the last message could not be sent as it was and you moved on to a fresh conversation, and write your reply to the group.'
+          : 'Your last turn could not finish because the model request kept failing. Go on with it now from the messages above, and first tell the user in one short sentence that the last message could not be sent as it was and you moved on to a fresh conversation.'
+          : room ? 'You were in the middle of your turn in the group. Go on with it now and write your reply to the group.'
+            : 'You were in the middle of a turn. Go on with it now from where you stopped.',
     ].join('\n')
   }
 
@@ -578,8 +587,9 @@ export function install(rt) {
     ...(resume ? { resume: true } : {}),
   })
 
-  /** @type {Map<string, {botId:string, roomId?:string, carry:any[], info?:any, resume:boolean, overflow:boolean, hard:boolean, started?:boolean, moved?:boolean, noteFailed?:boolean}>} */
+  /** @type {Map<string, {botId:string, roomId?:string, carry:any[], info?:any, resume:boolean, overflow:boolean, failed?:string, hard:boolean, started?:boolean, moved?:boolean, noteFailed?:boolean}>} */
   const switches = new Map()
+  const rescued = new Set()
   // Parts that have not started a turn yet, with their handoff package's size.
   const freshParts = new Map()
   // Context size where a part started, or where a checkpoint or a failed switch left
@@ -620,10 +630,10 @@ export function install(rt) {
 
   // `hard`: past the hard line or the window, the part moves on even without a note
   // from the model.
-  function startSwitch(agent, { resume = false, carry = [], info, overflow = false, hard = overflow } = {}) {
+  function startSwitch(agent, { resume = false, carry = [], info, overflow = false, failed, hard = overflow } = {}) {
     const place = placeOf(agent.id)
     if (place === undefined || switches.has(agent.id) || readOnly()) return
-    const job = { ...place, carry: [...carry], info, resume, overflow, hard }
+    const job = { ...place, carry: [...carry], info, resume, overflow, failed, hard }
     switches.set(agent.id, job)
     void runSwitch(agent, job)
       .catch(error => rt.warn('ds-bot: %s did not move on to a fresh part: %s', rt.botOf(job.botId)?.name ?? agent.id, error))
@@ -678,7 +688,7 @@ export function install(rt) {
     const number = parts.length
     let written
     let failure
-    if (!job.overflow) {
+    if (!job.overflow && job.failed === undefined) {
       try {
         written = await writeNote(agent, AbortSignal.any([signal, AbortSignal.timeout(NOTE_TIMEOUT_MS)]))
       } catch (error) {
@@ -699,7 +709,7 @@ export function install(rt) {
     if (failure !== undefined) rt.warn('ds-bot: handoff note for %s failed past the hard line; moving on with the earlier note: %s', bot.name, failure)
     const previous = parts.at(-2)
     const noted = written !== undefined ? { note: written.note }
-      : { fallback: job.overflow ? 'overflow' : 'failed', ...(previous?.note ? { note: previous.note, noteFrom: previous.noteFrom ?? previous.number } : {}) }
+      : { fallback: job.failed !== undefined ? 'failure' : job.overflow ? 'overflow' : 'failed', ...(previous?.note ? { note: previous.note, noteFrom: previous.noteFrom ?? previous.number } : {}) }
     const budget = Math.min(RECENT_TOKENS, Math.floor((lines?.check ?? 4 * RECENT_TOKENS) / 4))
     const carried = await handoffLines(agent.id, { budget, group: room !== undefined, number })
     if (signal.aborted) throw signal.reason
@@ -729,10 +739,11 @@ export function install(rt) {
       }
     }
     await rt.save()
+    if (job.failed !== undefined) rescued.add(freshId)
     void rt.moveSchedules(agent.id, freshId)
     job.moved = true
     const resume = job.resume || job.overflow
-    const text = handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow })
+    const text = handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed })
     freshParts.set(freshId, estimateTokens(text))
     const fresh = await rt.resolveAgent(freshId)
     fresh.followup(createUserMessage({ content: [{ type: 'text', text }], source: handoffSource(job, resume) }))
@@ -786,6 +797,20 @@ export function install(rt) {
   }, { prepend: true })
 
   ctx.on('agent/request-error', async (payload, next) => {
+    const failure = payload.failure
+    if (!STUCK_CODES.includes(failure?.code)) return next()
+    const decided = await next()
+    if (decided !== undefined || payload.signal?.aborted) return decided
+    await rt.load()
+    const { agent } = payload
+    if (!rt.isBotSession(agent.id) || switches.has(agent.id) || readOnly() || rescued.has(agent.id)) return decided
+    const entry = rt.liveOf(agent.id)
+    entry.switched = true
+    startSwitch(agent, { resume: true, info: entry.info, overflow: true, failed: failure.code })
+    return undefined
+  }, { prepend: true })
+
+  ctx.on('agent/request-error', async (payload, next) => {
     if (payload.failure?.code !== OVERFLOW || payload.signal?.aborted) return next()
     await rt.load()
     const { agent } = payload
@@ -819,8 +844,21 @@ export function install(rt) {
     }
   }
 
+  function releaseRescued(agent) {
+    if (!rescued.has(agent.id)) return
+    const latest = agent.session.seq - 1
+    const earliest = Math.max(0, latest - 199)
+    for (let seq = latest; seq >= earliest; seq -= 1) {
+      const event = agent.session.eventAt(seq)
+      if (event?.type !== 'turn/end') continue
+      if (event.data?.reason?.kind !== 'error') rescued.delete(agent.id)
+      break
+    }
+  }
+
   ctx.on('agent/status', ({ agent, status }) => {
     if (status === 'idle' && rt.isBotSession(agent.id)) {
+      releaseRescued(agent)
       void checkContext(agent).catch(error => rt.warn('ds-bot: context check for %s failed: %s', agent.id, error))
     }
   })
