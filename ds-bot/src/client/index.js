@@ -1,6 +1,6 @@
 import { call } from './api.js'
 import { isHex, inkText, paintCss } from './inks.js'
-import { SHAPES, markupCache, maskOf } from './characters.js'
+import { DEFAULT_MASK, SHAPES, markupCache, maskOf } from './characters.js'
 import { createSource, EMPTY_ROSTER, indexRoster, isAgentSession } from './sources.js'
 import { themeCss, shellTokens, conversationTokens, registry, registerShape, registerTheme, allThemes } from './themes.js'
 import { MENTION_ORIGIN, currentPart } from './text.js'
@@ -30,6 +30,7 @@ import { installLocale, language } from './i18n.js'
 import { noteClientError, quietly } from './diagnostics.js'
 import { ErrorToast, FEEDBACK_CSS } from './feedback.js'
 import { ABOUT_CSS } from './about.js'
+import { USER_MESSAGE_CSS, UserMessageCell, canDrawUserMessages } from './user-message.js'
 
 export const inject = ['sessions', 'uiWorkspace', 'uiConversation', 'slots', 'theme', 'layout', 'configForms']
 
@@ -232,18 +233,24 @@ export function apply(ctx) {
 
   ctx.effect(() => () => { markupCache.clear() }, 'ds-bot: character markup')
 
-  // Mentions wear each Bot's color and character silhouette (or its photo).
+  // Mentions wear each Bot's color and character silhouette (or its photo). A message
+  // DSH still draws itself, while it waits to be sent or to join a running turn, shows
+  // "@Name" as a file reference; one whose label is a whole Bot name wears the Bot's
+  // mark there too (a name with a space is cut by DSH, so it stays as DSH draws it).
   const installMentions = () => {
     const style = installStyles('', 'mentions')
     let last = ''
     const render = () => {
       const next = roster.getSnapshot().bots.map((bot) => {
         const anchor = `.bt-bubble a[href="${MENTION_ORIGIN}${bot.id}"]`
+        const chip = /\s/.test(bot.name) ? '' : `[class*="_userRow"] [data-ref-chip="file"][title="@${bot.name.replace(/["\\]/g, '\\$&')}" i]`
         const look = lookOf(bot)
+        const marks = chip ? `${anchor}::before,${chip}::before` : `${anchor}::before`
         const mark = look.image
-          ? `${anchor}::before{background:center/cover url("${look.image}");-webkit-mask:none;mask:none;border-radius:50%}`
-          : `${anchor}::before{background:${paintCss(look.color)};-webkit-mask-image:${maskOf(look.shape)};mask-image:${maskOf(look.shape)}}`
-        return `${anchor}{color:${inkText(look.color)}}${mark}`
+          ? `${marks}{background:center/cover url("${look.image}");-webkit-mask:none;mask:none;border-radius:50%}`
+          : `${marks}{background:${paintCss(look.color)};-webkit-mask-image:${maskOf(look.shape)};mask-image:${maskOf(look.shape)}}`
+        const chipBase = chip ? `${chip}{color:inherit;font-weight:600}${chip}>svg{display:none}${chip}::before{content:"";display:inline-block;flex:none;width:16px;height:16px;margin-right:3px;vertical-align:-3px;-webkit-mask:${DEFAULT_MASK} center/contain no-repeat;mask:${DEFAULT_MASK} center/contain no-repeat}` : ''
+        return `${anchor}{color:${inkText(look.color)}}${chipBase}${mark}`
       }).join('\n')
       if (next !== last) style.textContent = last = next
     }
@@ -741,6 +748,7 @@ export function apply(ctx) {
     installCompiledStyles(SCHEDULE_CSS, 'schedules'),
     installCompiledStyles(FEEDBACK_CSS, 'feedback'),
     installCompiledStyles(ABOUT_CSS, 'about'),
+    installCompiledStyles(USER_MESSAGE_CSS, 'user-messages'),
     browsers ? installCompiledStyles(BROWSER_CSS, 'browser') : null,
     installTheme(),
     shadow('sidebar.workspaces', { priority: -10, inject: face }, TeamSidebar),
@@ -776,6 +784,7 @@ export function apply(ctx) {
     // every message.
     shadow('conversation.chat.node', { key: 'question-reply', priority: -10, locale: 'chat' }, AnsweredCell),
     shadow('conversation.chat.node', { key: 'compaction', priority: -10, locale: 'chat' }, Nothing),
+    ...(canDrawUserMessages() ? ['user', 'steering'].map(key => shadow('conversation.chat.node', { key, priority: -10, locale: 'chat', inject: face }, UserMessageCell)) : []),
     shadow('conversation.input.permission', { priority: -10 }, Nothing),
     shadow('conversation.input.plan', { priority: -10 }, Nothing),
     // The composer carries no model picker or run statistics; a Bot's model lives
