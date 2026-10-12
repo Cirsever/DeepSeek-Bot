@@ -14,6 +14,8 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 - Bots give a brief progress message when starting a multi-step task in their own chat with the user, and at meaningful milestones on long tasks.
 - Every Bot can change its own name, role, color, model and instructions; only a Main Bot changes other Bots.
 - Updating a copy installed from GitHub uses the repository's current address.
+- The Usage page groups its statistics, chart, rankings and activity into one panel.
+- Hover over an Activity day to see its token count.
 
 ### Fixed
 
