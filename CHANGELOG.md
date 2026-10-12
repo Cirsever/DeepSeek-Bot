@@ -16,6 +16,7 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ### Fixed
 
+- Group chats reply when DSH uses programmatic tool calling (PTC), instead of rejecting the group relay.
 - In a group chat, a conversation referenced in a message reached none of the members, and a reference whose title started with a member's name called that member. Now the members who answer the message get the referenced conversation.
 - In a group chat, typing `@` and a Bot's name and pressing Enter inserted a conversation reference instead of the Bot's name.
 - A long conversation's fresh part keeps the Bot's model and thinking level. Before, the new part fell back to the default model.

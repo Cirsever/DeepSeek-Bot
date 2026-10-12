@@ -460,9 +460,16 @@ export function install(rt) {
         return
       }
       const id = `toolu_relay_${randomUUID().replace(/-/g, '')}`
+      // Use the request's scoped presentation, not the process-wide tool mode.
+      const ptc = options.tools?.some(tool => tool.name === 'run_code')
+        && !options.tools.some(tool => tool.name === 'group_relay')
+      const name = ptc ? 'run_code' : 'group_relay'
+      const args = ptc
+        ? JSON.stringify({ description: 'Relay this message to the group', code: 'return await tools.group_relay({})' })
+        : '{}'
       yield { type: 'block-start', index: 0, blockType: 'tool-call' }
-      yield { type: 'tool-call-delta', index: 0, id, name: 'group_relay', argumentsDelta: '{}' }
-      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name: 'group_relay', arguments: '{}' } }
+      yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } }
       yield { type: 'finish', reason: { kind: 'tool-calls' } }
     })()
   })

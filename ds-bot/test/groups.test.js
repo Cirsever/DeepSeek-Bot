@@ -1,10 +1,66 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { isPass, mentionsIn, referenceNote, stripOwnName, withoutReferences } from '../src/host/groups.js'
+import { install, isPass, mentionsIn, referenceNote, stripOwnName, withoutReferences } from '../src/host/groups.js'
 import { attachReference } from '../src/host/turns.js'
+import { fakeContext } from './fake-ctx.js'
 
 const members = [{ name: 'M' }, { name: 'Mx' }, { name: 'K' }, { name: 'Writer' }]
 const names = ({ all, found }) => ({ all, found: found.map(member => member.name) })
+
+function relayStream() {
+  const ctx = fakeContext()
+  install({ ctx, load: async () => {}, roomOf: id => id === 'room' ? { id } : undefined })
+  return ctx.listeners.get('llm/stream')[0]
+}
+
+const userPost = { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Hello group' }] }
+
+for (const [mode, tools, expected] of [
+  ['native', [{ name: 'group_relay' }], 'group_relay'],
+  ['ptc', [{ name: 'run_code' }], 'run_code'],
+  ['both', [{ name: 'run_code' }, { name: 'group_relay' }], 'group_relay'],
+  ['unspecified', undefined, 'group_relay'],
+]) {
+  test(`group relay uses the ${mode} request's callable tool exactly once`, async () => {
+    const stream = relayStream()
+    const options = { sessionId: 'room', tools, messages: [userPost] }
+    const next = () => assert.fail('A group relay must not call the model')
+    const events = await Array.fromAsync(stream(options, next))
+    const [call] = events.filter(event => event.type === 'block-end').map(event => event.block)
+    assert.equal(events.length, 4)
+    assert.equal(call.name, expected)
+    assert.deepEqual(events[1], { type: 'tool-call-delta', index: 0, id: call.id, name: call.name, argumentsDelta: call.arguments })
+    assert.deepEqual(events[3], { type: 'finish', reason: { kind: 'tool-calls' } })
+    const args = JSON.parse(call.arguments)
+    if (expected === 'run_code') {
+      assert.equal(args.description, 'Relay this message to the group')
+      let calls = 0
+      const run = new (Object.getPrototypeOf(async () => {}).constructor)('tools', args.code)
+      const result = await run({ group_relay: async (input) => {
+        calls += 1
+        assert.deepEqual(input, {})
+        return 'group replied'
+      } })
+      assert.equal(calls, 1)
+      assert.equal(result, 'group replied')
+    } else {
+      assert.deepEqual(args, {})
+    }
+    const settled = [...options.messages, { role: 'assistant', content: [call] }, { role: 'tool', toolCallId: call.id, content: [] }]
+    assert.deepEqual(await Array.fromAsync(stream({ ...options, messages: settled }, next)), [{ type: 'finish', reason: { kind: 'stop' } }])
+  })
+}
+
+test('group relay leaves private chats and auxiliary requests with the model', async () => {
+  const stream = relayStream()
+  const sentinel = { type: 'finish', reason: { kind: 'stop' } }
+  let calls = 0
+  const next = async function* () { calls += 1; yield sentinel }
+  for (const extra of [{}, { sessionId: 'bot' }, { sessionId: 'room', purpose: 'session-title' }]) {
+    assert.deepEqual(await Array.fromAsync(stream({ messages: [userPost], tools: [{ name: 'run_code' }], ...extra }, next)), [sentinel])
+  }
+  assert.equal(calls, 3)
+})
 
 test('mentionsIn finds members in order, longest name first', () => {
   assert.deepEqual(names(mentionsIn('@Mx and @M, then @writer', members)), { all: false, found: ['Mx', 'M', 'Writer'] })
