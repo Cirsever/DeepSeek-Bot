@@ -136,7 +136,8 @@ export function install(rt) {
   const NOTE_COOLDOWN_MS = [60_000, 300_000, 900_000]
   const SWITCH_ATTEMPTS = 5
   const OVERFLOW = 'CONTEXT_WINDOW_EXCEEDED'
-  const STUCK_CODES = ['TRANSPORT', 'INVALID_REQUEST', 'IMAGE_OFFLOAD_REQUIRED']
+  // A failed connection says nothing about the conversation, so it never moves a part on.
+  const STUCK_CODES = ['INVALID_REQUEST', 'IMAGE_OFFLOAD_REQUIRED']
   const ORIGINAL_COMPACT = Symbol.for('ds-bot/compaction')
   const HANDOFF_ACK = 'Noted. I have my handoff note and carry on from here.'
   const STEWARD_MAX_TOKENS = 4_096
@@ -555,7 +556,7 @@ export function install(rt) {
       : `${head} It is the note written at the end of part ${segment.noteFrom}, carried over unchanged; anything newer is in the messages below, and read_own_chat finds the rest.)\n\n${segment.note}`
   }
 
-  function handoffPackage({ room, segment, lines, number, resume, overflow, failed }) {
+  function handoffPackage({ room, segment, lines, number, resume, overflow, failed, bare }) {
     const where = room ? `your conversation in the group chat "${room.name}"` : 'your own chat with the user'
     const lookup = room
       ? 'read_group_chat shows the group\'s latest messages, and read_own_chat your own chat.'
@@ -587,6 +588,7 @@ export function install(rt) {
       recent.length > 0 ? recent.join('\n') : '(none)',
       '',
       !resume ? 'Every message above has had its answer. Nothing needs an answer now; wait for the next message.'
+        : bare ? `Your last turn could not finish because the model request kept failing, also in a fresh conversation with the latest messages carried over, so they are left out this time. First tell ${room ? 'the group' : 'the user'} in one short sentence that the last message could not be sent, and ask for it again.`
         : failed !== undefined ? room
           ? 'Your last turn could not finish because the model request kept failing. Go on with it now from the messages above, and first tell the group in one short sentence that the last message could not be sent as it was and you moved on to a fresh conversation, and write your reply to the group.'
           : 'Your last turn could not finish because the model request kept failing. Go on with it now from the messages above, and first tell the user in one short sentence that the last message could not be sent as it was and you moved on to a fresh conversation.'
@@ -605,9 +607,12 @@ export function install(rt) {
     ...(resume && job.joined?.length ? { joined: job.joined } : {}),
   })
 
-  /** @type {Map<string, {botId:string, roomId?:string, carry:any[], info?:any, joined?:any[], resume:boolean, overflow:boolean, failed?:string, hard:boolean, started?:boolean, moved?:boolean, noteFailed?:boolean}>} */
+  /** @type {Map<string, {botId:string, roomId?:string, carry:any[], info?:any, joined?:any[], resume:boolean, overflow:boolean, failed?:string, bare?:boolean, hard:boolean, started?:boolean, moved?:boolean, noteFailed?:boolean}>} */
   const switches = new Map()
-  const rescued = new Set()
+  // Parts opened because requests kept failing, until one of their turns ends well:
+  // 'carried' brought the latest messages along, 'bare' left them out.
+  /** @type {Map<string, 'carried'|'bare'>} */
+  const rescued = new Map()
   // Parts that have not started a turn yet, with their handoff package's size.
   const freshParts = new Map()
   // Context size where a part started, or where a checkpoint or a failed switch left
@@ -648,10 +653,10 @@ export function install(rt) {
 
   // `hard`: past the hard line or the window, the part moves on even without a note
   // from the model.
-  function startSwitch(agent, { resume = false, carry = [], info, joined, overflow = false, failed, hard = overflow } = {}) {
+  function startSwitch(agent, { resume = false, carry = [], info, joined, overflow = false, failed, bare = false, hard = overflow } = {}) {
     const place = placeOf(agent.id)
     if (place === undefined || switches.has(agent.id) || readOnly()) return
-    const job = { ...place, carry: [...carry], info, joined, resume, overflow, failed, hard }
+    const job = { ...place, carry: [...carry], info, joined, resume, overflow, failed, bare, hard }
     switches.set(agent.id, job)
     void runSwitch(agent, job)
       .catch(error => rt.warn('ds-bot: %s did not move on to a fresh part: %s', rt.botOf(job.botId)?.name ?? agent.id, error))
@@ -730,7 +735,7 @@ export function install(rt) {
     const noted = written !== undefined ? { note: written.note }
       : { fallback: job.failed !== undefined ? 'failure' : job.overflow ? 'overflow' : 'failed', ...(previous?.note ? { note: previous.note, noteFrom: previous.noteFrom ?? previous.number } : {}) }
     const budget = Math.min(RECENT_TOKENS, Math.floor((lines?.check ?? 4 * RECENT_TOKENS) / 4))
-    const carried = await handoffLines(agent.id, { budget, group: room !== undefined, number })
+    const carried = job.bare ? { recent: [], earlier: [], unlisted: 0, complete: true } : await handoffLines(agent.id, { budget, group: room !== undefined, number })
     if (signal.aborted) throw signal.reason
     const freshId = await rt.createSession(room ? `${bot.name} · ${room.name}` : bot.name)
     const route = session.requestHeader()?.config
@@ -759,11 +764,11 @@ export function install(rt) {
       }
     }
     await rt.save()
-    if (job.failed !== undefined) rescued.add(freshId)
+    if (job.failed !== undefined) rescued.set(freshId, job.bare ? 'bare' : 'carried')
     void rt.moveSchedules(agent.id, freshId)
     job.moved = true
     const resume = job.resume || job.overflow
-    const text = handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed })
+    const text = handoffPackage({ room, segment, lines: carried, number: number + 1, resume, overflow: job.overflow, failed: job.failed, bare: job.bare })
     freshParts.set(freshId, estimateTokens(text))
     const fresh = await rt.resolveAgent(freshId)
     fresh.followup(createUserMessage({ content: [{ type: 'text', text }], source: handoffSource(job, resume) }))
@@ -823,10 +828,14 @@ export function install(rt) {
     if (decided !== undefined || payload.signal?.aborted) return decided
     await rt.load()
     const { agent } = payload
-    if (!rt.isBotSession(agent.id) || switches.has(agent.id) || readOnly() || rescued.has(agent.id)) return decided
+    if (!rt.isBotSession(agent.id) || switches.has(agent.id) || readOnly() || rescued.get(agent.id) === 'bare') return decided
+    // A provider may turn down one request for reasons of its own; a history that
+    // breaks every request fails the next turn as well.
+    if (failure.code === 'INVALID_REQUEST' && !STUCK_CODES.includes(lastTurnEnd(agent)?.data?.reason?.error?.code)) return decided
     const entry = rt.liveOf(agent.id)
     entry.switched = true
-    startSwitch(agent, { resume: true, info: entry.info, joined: [...(entry.joined ?? [])], overflow: true, failed: failure.code })
+    // The latest messages carried into a rescued part may be what breaks the request.
+    startSwitch(agent, { resume: true, info: entry.info, joined: [...(entry.joined ?? [])], overflow: true, failed: failure.code, bare: rescued.has(agent.id) })
     return undefined
   }, { prepend: true })
 
@@ -864,16 +873,20 @@ export function install(rt) {
     }
   }
 
+  // The newest turn/end among the Session's last events in memory.
+  function lastTurnEnd(agent) {
+    const latest = agent.session.seq - 1
+    for (let seq = latest; seq >= Math.max(0, latest - 199); seq -= 1) {
+      const event = agent.session.eventAt?.(seq)
+      if (event?.type === 'turn/end') return event
+    }
+    return undefined
+  }
+
   function releaseRescued(agent) {
     if (!rescued.has(agent.id)) return
-    const latest = agent.session.seq - 1
-    const earliest = Math.max(0, latest - 199)
-    for (let seq = latest; seq >= earliest; seq -= 1) {
-      const event = agent.session.eventAt(seq)
-      if (event?.type !== 'turn/end') continue
-      if (event.data?.reason?.kind !== 'error') rescued.delete(agent.id)
-      break
-    }
+    const end = lastTurnEnd(agent)
+    if (end !== undefined && end.data?.reason?.kind !== 'error') rescued.delete(agent.id)
   }
 
   ctx.on('agent/status', ({ agent, status }) => {
