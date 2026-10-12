@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import fsp from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { format } from 'node:util'
@@ -341,4 +343,114 @@ test('a hidden Bot made Main Bot shows again, and a replaced Chief drops its hel
   await call('update-bot', { id: chief, model: 'deepseek/deepseek-v4-flash' })
   await settle()
   assert.equal(sent.length, greeted)
+})
+
+const takeover = (home, team) => {
+  writeFileSync(join(home, 'state.lock'), JSON.stringify({ pid: process.ppid, host: hostname(), token: 'new-owner' }))
+  if (team !== undefined) writeFileSync(join(home, 'state.json'), JSON.stringify(team))
+}
+
+test('a host that loses its lock to another dsh refuses changes instead of making a phantom Bot', async (t) => {
+  const { call, stop, home, ctx } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' } } })
+  t.after(stop)
+  assert.equal((await call('state', {})).value.readOnly, null)
+  let created = 0
+  const create = ctx.sessionController.create
+  ctx.sessionController.create = async (...args) => { created += 1; return create(...args) }
+  // Another live dsh takes the lock and writes its own team.
+  takeover(home, { version: 1, revision: 9, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' }, other: { id: 'other', name: 'FromB' } } })
+  const answer = await call('create-bot', { name: 'Phantom' })
+  assert.equal(answer.ok, false)
+  assert.equal(answer.error.code, 'bot/read-only')
+  assert.equal(created, 0)
+  // The file keeps the new owner's team, and this host now follows it.
+  const team = (await call('state', {})).value
+  assert.match(team.readOnly, /another dsh/)
+  assert.ok(team.bots.some(bot => bot.name === 'FromB'))
+  assert.equal(team.bots.some(bot => bot.name === 'Phantom'), false)
+})
+
+test('a delete whose save fails still stops the Sessions, and the next save writes it', async (t) => {
+  const { call, stop, home, archived } = start(TEAM_WITH_PART, { models: ['deepseek-v4-flash'] })
+  t.after(stop)
+  await call('state', {})
+  archived.length = 0
+  const blocker = join(home, `state.json.${process.pid}.tmp`)
+  mkdirSync(blocker)
+  const answer = await call('delete-bot', { id: 'w1' })
+  assert.equal(answer.ok, false)
+  // The Bot is gone from the team, so nothing could stop its tasks later.
+  assert.deepEqual(archived, [
+    ['w1', { stopActivity: true }],
+    ['w2', { stopActivity: true }],
+  ])
+  rmSync(blocker, { recursive: true })
+  await call('set-prefs', { theme: 'dark' })
+  const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.equal(saved.bots.w1, undefined)
+})
+
+test('a rolled-back Bot does not come back with a save queued before the rollback', async (t) => {
+  const { call, stop, home } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' } } })
+  t.after(async () => {
+    fsp.rename = rename
+    syncBuiltinESMExports()
+    stop()
+  })
+  // The first Bot also saves the team's workspace; later ones save only themselves.
+  await call('create-bot', { name: 'Warm' })
+  const statePath = join(home, 'state.json')
+  const rename = fsp.rename
+  let entered
+  let release
+  const first = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  let failed = false
+  fsp.rename = async (from, to) => {
+    if (to === statePath && !failed) {
+      failed = true
+      entered()
+      await gate
+      throw Object.assign(new Error('rename failed'), { code: 'EIO' })
+    }
+    return rename(from, to)
+  }
+  syncBuiltinESMExports()
+  const phantom = call('create-bot', { name: 'Phantom' })
+  await first
+  // A second Bot's save queues a snapshot that still holds Phantom.
+  const kept = call('create-bot', { name: 'Kept' })
+  await settle()
+  release()
+  assert.equal((await phantom).ok, false)
+  assert.equal((await kept).ok, true)
+  await settle()
+  const names = Object.values(JSON.parse(readFileSync(statePath, 'utf8')).bots).map(bot => bot.name)
+  assert.deepEqual(names.sort(), ['Chief', 'Kept', 'Warm'])
+})
+
+test('a write that fails at save time archives the Session it made', async (t) => {
+  const { call, stop, home, ctx } = start({ version: 1, mainBotIds: ['chief'], bots: { chief: { id: 'chief', name: 'Chief' } } })
+  t.after(stop)
+  await call('state', {})
+  const created = []
+  const create = ctx.sessionController.create
+  ctx.sessionController.create = async (...args) => {
+    const made = await create(...args)
+    created.push(made.sessionId)
+    // The disk write fails after this request's refresh, before its save.
+    mkdirSync(join(home, `state.json.${process.pid}.tmp`))
+    return made
+  }
+  const archived = []
+  const archive = ctx.workspaceRegistry.archiveSession
+  ctx.workspaceRegistry.archiveSession = async (id) => { archived.push(id); return archive(id) }
+  const answer = await call('create-bot', { name: 'Phantom' })
+  assert.equal(answer.ok, false)
+  assert.equal(answer.error.code, 'bot/internal')
+  assert.deepEqual(archived, created)
+  const team = (await call('state', {})).value
+  assert.equal(team.bots.some(bot => bot.name === 'Phantom'), false)
+  const saved = JSON.parse(readFileSync(join(home, 'state.json'), 'utf8'))
+  assert.equal(Object.values(saved.bots).some(bot => bot.name === 'Phantom'), false)
 })
