@@ -160,7 +160,9 @@ function decide(body) {
     // "长任务 N [K]": N steps in one turn, each adding about K thousand characters (default 4).
     const openerAt = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content)))
     if (openerAt !== -1 && used?.name === 'list_bots') {
-      const [, steps, size = 4] = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(textOf(messages[openerAt].content)).map(Number)
+      const task = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(textOf(messages[openerAt].content))
+      const steps = Number(task[1])
+      const size = Number(task[2] ?? 4)
       const done = messages.slice(openerAt + 1).filter(isResults).length
       if (done < steps) return [text(filler(size * 1000, `步骤${done + 1}`)), tool('list_bots', {})]
       return [text(`长任务做完了，一共 ${done} 步。`)]
@@ -235,7 +237,9 @@ function decide(body) {
   // interrupt or a relayed note); only a fresh opener or "[Stopped by" ends it.
   const longOpener = messages.findLastIndex(m => m.role === 'user' && !isResults(m) && /^长任务\s*\d+/.test(textOf(m.content)))
   if (longOpener !== -1 && /^\[(?:Interrupt|Message|Reply) from /.test(userText)) {
-    const [, steps, size = 4] = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(textOf(messages[longOpener].content)).map(Number)
+    const task = /^长任务\s*(\d+)(?:\s+(\d+))?/.exec(textOf(messages[longOpener].content))
+    const steps = Number(task[1])
+    const size = Number(task[2] ?? 4)
     const done = messages.slice(longOpener + 1).filter(isResults).length
     if (done < steps) return [text(filler(size * 1000, `步骤${done}`)), tool('list_bots', {})]
   }
@@ -582,4 +586,4 @@ const server = createServer((req, res) => {
   })
 })
 
-server.listen(PORT, '127.0.0.1', () => console.log(`ds-bot mock on http://127.0.0.1:${PORT}/v1`))
+server.listen(PORT, '127.0.0.1', () => console.log(`ds-bot mock on http://127.0.0.1:${server.address().port}/v1`))
