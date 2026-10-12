@@ -14,6 +14,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { ROOM_REPLY_TIMEOUT_MS, SOURCE_KIND } from './constants.js'
 import { escapeRegExp, splitRef, textOf } from './text.js'
+import { mentionSpans } from '../shared/mentions.js'
 import { GROUP_REF, output } from './tools.js'
 import { failureLine } from './turns.js'
 
@@ -56,40 +57,19 @@ const transcript = lines => lines.map(lineText).join('\n')
 export const stripOwnName = (name, text) => text.replace(new RegExp(`^\\s*\\**${escapeRegExp(name)}\\**\\s*[:：]\\s*`), '').trim()
 export const isPass = text => text === '' || /^\s*[[【(（]\s*pass\s*[\]】)）]|^\s*pass\s*[.。!！]?\s*$/i.test(text)
 
-// "@Name" mentions in order of appearance. Longest names match first so "@Mx" never
-// reads as "@M"; only ASCII letters and digits continue a name, so "@K你好" is K.
-const ROOM_ALL = ['all', 'everyone', '所有人', '全体']
-const NAME_GOES_ON = /^[a-z0-9_-]/i
-export const mentionsIn = (text, members) => {
-  const byLength = [...members].sort((a, b) => b.name.length - a.name.length)
+// Who "@" calls, in order, by the same rule the bubbles draw. `references` are the
+// round's referenced conversations: each one's "@label" is a reference, not a call.
+// Pass every member, the speaker too, so "@新 Bot 2" said by 新 Bot 2 is never read as
+// a call to 新 Bot; the caller drops the speaker.
+export const mentionsIn = (text, members, references = []) => {
   const found = []
   let all = false
-  for (let at = text.indexOf('@'); at !== -1; at = text.indexOf('@', at + 1)) {
-    if (at > 0 && /[a-z0-9_.]/i.test(text[at - 1])) continue
-    const rest = text.slice(at + 1)
-    const starts = word => rest.toLowerCase().startsWith(word.toLowerCase()) && !NAME_GOES_ON.test(rest.slice(word.length))
-    if (ROOM_ALL.some(starts)) all = true
-    const hit = byLength.find(member => starts(member.name))
-    if (hit && !found.includes(hit)) found.push(hit)
+  for (const span of mentionSpans(text, members, { references: references.flatMap(reference => reference.labels) })) {
+    if (span.all) all = true
+    else if (!found.includes(span.bot)) found.push(span.bot)
   }
   return { all, found }
 }
-
-// DSH writes each referenced conversation into the message as one "@label"; that is not
-// a call, even when the label starts with a member's name. Only that one "@label" goes,
-// so a "@Name" the user typed with the same text still calls.
-const dropMention = (text, label) => {
-  const mention = `@${label}`
-  for (let at = text.indexOf(mention); at !== -1; at = text.indexOf(mention, at + 1)) {
-    const end = at + mention.length
-    if ((at === 0 || !/[a-z0-9_.]/i.test(text[at - 1])) && !NAME_GOES_ON.test(text.slice(end))) return text.slice(0, at) + text.slice(end)
-  }
-  return text
-}
-export const withoutReferences = (text, references = []) => references
-  .flatMap(reference => reference.labels)
-  .sort((a, b) => b.length - a.length)
-  .reduce(dropMention, text)
 
 // What the user referenced in this round, for a member that has not been shown it yet.
 export const referenceNote = references => (references?.length
@@ -313,8 +293,10 @@ export function install(rt) {
       void rt.save().catch(() => {})
       // Only the admin's "@all" calls everyone, so a member cannot set off a storm.
       const leads = rt.isAdminOf(room, member.id)
-      const others = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
-      const { all, found } = mentionsIn(reply, others)
+      const everyone = room.members.map(rt.botOf).filter(Boolean)
+      const others = everyone.filter(other => other.id !== member.id)
+      const { all, found: named } = mentionsIn(reply, everyone)
+      const found = named.filter(other => other.id !== member.id)
       const callees = leads && all ? [...found, ...others.filter(other => !found.includes(other))] : found
       callMembers(round, turns, index, callees, `${member.name} mentioned you`, leads ? ROOM_ADMIN_TURNS_EACH : ROOM_TURNS_EACH)
     }
@@ -454,10 +436,12 @@ export function install(rt) {
   // A Bot that posts never answers its own post. @mentions choose the speakers; else
   // the admin answers alone in admin mode, or first of everyone.
   function openingSpeakers(room, opener) {
-    const members = room.members.map(rt.botOf).filter(bot => bot && bot.id !== opener.botId)
+    const everyone = room.members.map(rt.botOf).filter(Boolean)
+    const members = everyone.filter(bot => bot.id !== opener.botId)
     const admin = members.find(bot => rt.isAdminOf(room, bot.id))
     if (opener.kickoff) return admin ? [admin] : []
-    const { all, found } = mentionsIn(withoutReferences(opener.text, opener.references), members)
+    const { all, found: named } = mentionsIn(opener.text, everyone, opener.references)
+    const found = named.filter(bot => bot.id !== opener.botId)
     if (found.length > 0 && !all) return found
     if (!all && room.mode === 'admin' && admin) return [admin]
     return admin ? [admin, ...members.filter(bot => bot !== admin)] : members
