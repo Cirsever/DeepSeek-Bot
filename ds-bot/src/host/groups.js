@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { ROOM_REPLY_TIMEOUT_MS, SOURCE_KIND } from './constants.js'
-import { escapeRegExp, splitRef } from './text.js'
+import { escapeRegExp, splitRef, textOf } from './text.js'
 import { GROUP_REF, output } from './tools.js'
 import { failureLine } from './turns.js'
 
@@ -202,11 +202,71 @@ export function install(rt) {
     return stripOwnName(member.name, String(reply ?? '').trim())
   }
 
-  async function runRound(room, round, signal) {
-    const limit = round.slots.length + ROOM_EXTRA_TURNS + (room.admin ? ROOM_ADMIN_EXTRA_TURNS : 0)
+  // A called member moves up if it is still waiting, or gets one more turn if it
+  // already spoke; either way it goes right after slot `index`. `cap` is the caller's
+  // per-member turn bound for the round.
+  function callMembers(round, turns, index, callees, note, cap) {
+    let next = index + 1
+    for (const peer of callees) {
+      if ((turns.get(peer.id) ?? 0) >= cap) continue
+      const waiting = round.slots.findIndex((other, at) => at > index && other.id === peer.id && other.status === 'waiting')
+      const called = waiting === -1 ? { id: peer.id, name: peer.name, status: 'waiting' } : round.slots.splice(waiting, 1)[0]
+      called.note = note
+      round.slots.splice(next, 0, called)
+      next += 1
+    }
+  }
+
+  // The user's messages waiting in the group Session's inbox while a round runs, from
+  // the composer whether it queued or steered them. Images and chat references are
+  // only read when the Session takes the message itself, so a message with either
+  // stays for the next round, and so does everything after it in that list.
+  const waitingLines = agent => ['nextStep', 'nextTurn'].flatMap((list) => {
+    const lines = []
+    for (const message of agent?.inbox?.[list] ?? []) {
+      if (message.source?.kind !== 'user') continue
+      const content = Array.isArray(message.content) ? message.content : []
+      const text = textOf(content)
+      if (text === '' || content.some(block => block?.type !== 'text') || text.includes('dsh-session:')) break
+      lines.push({ id: message.id, text })
+    }
+    return lines
+  })
+
+  // Messages the user sent while this round is running post into the log before the
+  // next speaker, so everyone still to speak sees them. The members the message's own
+  // round would open with answer it next, inside this round. Each message leaves the
+  // Session's inbox, so it does not open another round when this one ends. Returns
+  // the number of turns added, which the round's limit allows for.
+  function drainRoomInbox(room, round, turns, index, agent) {
+    // The greeting's prompt tells the admin the user has not written yet.
+    if (round.kickoff) return 0
+    const lines = waitingLines(agent).filter(line => agent.inbox.remove(line.id))
+    if (lines.length === 0) return 0
+    const before = round.slots.length
+    const members = room.members.map(rt.botOf).filter(Boolean)
+    for (const line of lines) {
+      appendRoom(room, { who: 'User', text: line.text })
+      round.replies.push({ kind: 'user', text: line.text, time: Date.now() })
+      const { all, found } = mentionsIn(line.text, members)
+      const note = all || found.length > 0 ? 'the user mentioned you' : 'new message from the user'
+      callMembers(round, turns, index - 1, openingSpeakers(room, { text: line.text }), note, ROOM_ADMIN_TURNS_EACH)
+    }
+    // The user spoke in this room, so Bots may start their own rounds again.
+    room.botRounds = 0
+    void rt.save().catch(() => {})
+    return round.slots.length - before
+  }
+
+  async function runRound(room, round, signal, agent) {
+    let limit = round.slots.length + ROOM_EXTRA_TURNS + (room.admin ? ROOM_ADMIN_EXTRA_TURNS : 0)
     const turns = new Map()
-    for (let index = 0; index < round.slots.length && round.turns < limit; index += 1) {
+    // The inbox check keeps a message sent during the last speaker's turn inside
+    // this round: it drains at the loop's head even once the slots ran out.
+    for (let index = 0; (index < round.slots.length || waitingLines(agent).length > 0) && round.turns < limit; index += 1) {
       if (signal.aborted) break
+      limit += drainRoomInbox(room, round, turns, index, agent)
+      if (index >= round.slots.length) break
       const slot = round.slots[index]
       const member = rt.botOf(slot.id)
       // Settings may change mid-round, for example when the admin removes someone.
@@ -250,23 +310,13 @@ export function install(rt) {
       slot.status = 'posted'
       appendRoom(room, { who: member.name, botId: member.id, text: reply })
       round.replies.push({ botId: member.id, name: member.name, color: member.color, text: reply, time: Date.now() })
-      void rt.save()
-      // A called member moves up if it is still waiting, or gets one more turn if it
-      // already spoke; either way it goes right after this speaker. Only the admin's
-      // "@all" calls everyone, so a member cannot set off a storm.
+      void rt.save().catch(() => {})
+      // Only the admin's "@all" calls everyone, so a member cannot set off a storm.
       const leads = rt.isAdminOf(room, member.id)
       const others = room.members.filter(id => id !== member.id).map(rt.botOf).filter(Boolean)
       const { all, found } = mentionsIn(reply, others)
       const callees = leads && all ? [...found, ...others.filter(other => !found.includes(other))] : found
-      let next = index + 1
-      for (const peer of callees) {
-        if ((turns.get(peer.id) ?? 0) >= (leads ? ROOM_ADMIN_TURNS_EACH : ROOM_TURNS_EACH)) continue
-        const waiting = round.slots.findIndex((other, at) => at > index && other.id === peer.id && other.status === 'waiting')
-        const called = waiting === -1 ? { id: peer.id, name: peer.name, status: 'waiting' } : round.slots.splice(waiting, 1)[0]
-        called.note = `${member.name} mentioned you`
-        round.slots.splice(next, 0, called)
-        next += 1
-      }
+      callMembers(round, turns, index, callees, `${member.name} mentioned you`, leads ? ROOM_ADMIN_TURNS_EACH : ROOM_TURNS_EACH)
     }
   }
 
@@ -313,7 +363,7 @@ export function install(rt) {
       }
       rt.roomProgress.set(exec.callId, round)
       try {
-        await runRound(room, round, exec.signal)
+        await runRound(room, round, exec.signal, exec.agent)
       } catch (error) {
         rt.warn('ds-bot: group round in %s stopped: %s', room.name, error)
       } finally {
@@ -357,7 +407,7 @@ export function install(rt) {
         for (const round of rt.roomProgress.values()) {
           if (round.roomId === room.id) round.replies.push({ kind: 'lookup', botId: member.id, name: member.name, color: member.color, text, time: Date.now() })
         }
-        void rt.save()
+        void rt.save().catch(() => {})
       }
       const partsNote = parts.length > 1 ? `\n\nYour own chat has ${parts.length} parts: ${rt.partIndex(parts)}. Call read_own_chat with part N for the note that closed an earlier part, or with words to search all parts.` : ''
       if (query === '' && around !== '') {
