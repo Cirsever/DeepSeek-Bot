@@ -123,7 +123,12 @@ export function AssistantCell({ node, groupPart, sessionId, useRoster, useUi, us
     texts.length ? h(Bubbles, { texts, roster, selfId: roster.byId[sessionId]?.id ?? sessionId, actions, streaming: running, sessionId, msgKey: `${sessionId}:${data.turn}:${node.key ?? data.seq ?? ''}`, useUi }) : null)
 }
 
-function EventLine({ prefix, bots, joiner = t('and'), onOpen }) {
+function EventLine({ prefix, bots, joiner = t('and'), onOpen, whole = false }) {
+  if (whole && bots.length === 1) {
+    return h('div', { className: 'bt-event' },
+      h('button', { type: 'button', className: 'bt-event-whole', title: bots[0].name, onClick: () => onOpen?.(bots[0]) },
+        h('span', null, prefix), h(BotMark, { bot: bots[0], size: 16 }), h('span', { className: 'bt-event-name' }, bots[0].name)))
+  }
   const parts = []
   parts.push(h('span', { key: 'p' }, prefix))
   bots.forEach((bot, index) => {
@@ -248,7 +253,7 @@ function EarlierParts({ sessionId, roster, actions }) {
           if (row.role === 'report') return h(GroupEvent, { key, prefix: t('Replies from'), room: roster.roomsById[row.roomId], name: t('a group chat'), roster, actions })
           const other = roster.byId[row.botId] ?? { id: row.botId, name: row.name ?? t('a Bot'), color: 'gray' }
           const prefix = { stopped: t('Stopped by'), interrupt: t('Interrupt from'), reply: t('Reply from') }[row.role] ?? t('Message from')
-          return h(EventLine, { key, prefix, bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) } })
+          return h(EventLine, { key, prefix, bots: [other], onOpen: () => { if (selfId && other.id) actions.openExchange(selfId, other.id) }, whole: true })
         }
         default: return null
       }
@@ -325,6 +330,7 @@ export function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnCl
         prefix: source.role === 'stopped' ? t('Stopped by') : source.role === 'interrupt' ? t('Interrupt from') : count > 1 ? t('{count} messages with', { count }) : t('Message from'),
         bots,
         onOpen: bot => actions.openExchange(selfId, bot.id),
+        whole: true,
       })
     }
     if (source.kind === 'schedule') {
@@ -553,17 +559,17 @@ export function ToolCell({ node, sessionId, useRoster, useUi, actions }) {
     case 'message_bot': {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't message {name}", { name: target.name }))
-      return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id) })
+      return h(EventLine, { prefix: t('Messaged'), bots: [target], onOpen: bot => bot.id && actions.openExchange(self?.id ?? sessionId, bot.id), whole: true })
     }
     case 'interrupt_bot': {
       const target = findBot(arg('to')) ?? { name: arg('to') ?? '…', color: 'gray' }
       if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't interrupt {name}", { name: target.name }))
-      return h(EventLine, { prefix: t('Interrupted'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) })
+      return h(EventLine, { prefix: t('Interrupted'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id), whole: true })
     }
     case 'stop_bot': {
       const target = findBot(arg('bot')) ?? { name: arg('bot') ?? '…', color: 'gray' }
       if (done && root.isError) return h('div', { className: 'bt-event' }, t("Couldn't stop {name}", { name: target.name }))
-      return h(EventLine, { prefix: t('Stopped'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id) })
+      return h(EventLine, { prefix: t('Stopped'), bots: [target], onOpen: bot => bot.id && actions.openExchange(roster.byId[sessionId]?.id ?? sessionId, bot.id), whole: true })
     }
     case 'create_bot': {
       const created = findBot(arg('name'))
