@@ -557,7 +557,7 @@ export function apply(ctx) {
     saveCapability: capability => after(call('capability-save', capability)),
     deleteCapability: name => after(call('capability-delete', { name })),
     approveCapability: name => after(call('capability-approve', { name })),
-    setBotCapabilities: (botId, capabilities) => after(call('bot-capabilities', { botId, capabilities })),
+    setBotCapability: (botId, name, attached) => after(call('bot-capability', { botId, name, attached })),
     schedules: () => call('schedules'),
     scheduleCreate: task => call('schedule-create', task),
     scheduleDelete: (sessionId, id) => call('schedule-delete', { sessionId, id }),
