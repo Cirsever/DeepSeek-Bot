@@ -21,8 +21,8 @@ function start(state, { config = {}, services } = {}) {
     const response = await route.fetch(new Request('http://localhost/api/bot', { method: 'POST', body: JSON.stringify({ endpoint, payload }) }))
     return response.json()
   }
-  const stop = () => {
-    ctx.dispose()
+  const stop = async () => {
+    await ctx.dispose()
     rmSync(home, { recursive: true, force: true, maxRetries: 5 })
   }
   return { ctx, call, stop, applyResult }
@@ -64,6 +64,9 @@ test('apply registers listeners, tools, and effects in a fixed order', (t) => {
     'tool read_group_chat',
     'on llm/stream',
     'on approval/request (prepend)',
+    'on agent/inbox/discarded',
+    'on session/event',
+    'effect ds-bot: resume interrupted turns',
     'effect ds-bot: memory section',
     'prompt bot-memory 645',
     'tool remember',
