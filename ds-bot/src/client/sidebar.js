@@ -70,12 +70,14 @@ function RoomRow({ room, roster, actions, useSessions, useSessionStatus, useSess
   const preview = room.preview?.replace(/\s+/g, ' ').trim() || fallback
   const active = useSessionRetainInfo(id, info => (info?.retainedBy?.mainView ?? 0) > 0)
   const unread = useSessionStatus(map => map.get(id)?.completionUnread === true) || (marked && !active)
+  const asked = (roster.roomQuestions?.[id] ?? []).some(card => card.live === true)
   useMarkedUnread(id, active, marked, actions)
   if (room.hidden && !active) return null
   const pinned = room.pinned === true
+  const label = [room.name, pinned ? t('Pinned') : '', asked ? t('Waiting for your answer') : ''].filter(Boolean).join(', ')
   return h('button', {
-    type: 'button', className: 'bt-row', 'aria-label': pinned ? `${room.name}, ${t('Pinned')}` : room.name, 'aria-current': active ? 'page' : undefined,
-    'data-room-id': id, onClick: () => actions.openSession(id),
+    type: 'button', className: 'bt-row', 'aria-label': label, 'aria-current': active ? 'page' : undefined,
+    'data-room-id': id, 'data-question': asked ? '' : undefined, onClick: () => actions.openSession(id),
     onContextMenu: (event) => { event.preventDefault(); actions.openMenu({ kind: 'room', id, x: event.clientX, y: event.clientY }) },
   },
   h(RoomAvatar, { room, roster, size: 36 }),
@@ -83,7 +85,7 @@ function RoomRow({ room, roster, actions, useSessions, useSessionStatus, useSess
   wide ? h('span', { className: 'bt-row-body' },
     h('span', { className: 'bt-row-name' }, h('span', { className: 'bt-row-title' }, room.name), pinned ? h(PinMark) : null),
     preview ? h('span', { className: 'bt-row-preview' }, preview) : null) : null,
-  wide && unread && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
+  wide && (unread || asked) && !active ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null)
 }
 
 // One expanded DSH Agent Session row: title, relative stamp, rename field, and a

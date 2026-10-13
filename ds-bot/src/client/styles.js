@@ -415,6 +415,15 @@ button.bt-q-opt:active{background:var(--bt-active)}
 .bt-drawer-model{display:flex;flex-direction:column}
 .bt-drawer-model .bt-note{margin-top:6px}
 .bt-drawer-permission{display:flex;flex-direction:column}
+/* A preset name as long as "Auto review" must not be squeezed onto a second line: the
+   chips keep one line each and the row wraps instead. The chips grow with their own
+   content width so a short name stays narrow and the line still ends flush; a thumb that
+   only spans one row cannot mark a chip in either row, so the chosen chip keeps its own
+   fill. */
+.bt-drawer-permission .bt-seg{flex-wrap:wrap;height:auto}
+.bt-drawer-permission .bt-seg>.bt-thumb{display:none}
+.bt-drawer-permission .bt-seg button{flex:1 1 auto;height:auto;min-height:30px;padding:0 10px;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center}
+.bt-drawer-permission .bt-seg[data-glide] button[aria-pressed=true]{background:var(--bt-card);color:var(--bt-ink);box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .bt-seg button.bt-perm-danger,.bt-seg button.bt-perm-danger[aria-pressed=true]{color:#e02135}
 
 /* Settings dialog: a 198px page list beside the page. */
@@ -922,6 +931,18 @@ div:has(> nav [class*="_marks"]){display:none!important}
 .bt-q-inline .bt-q{margin:0;max-width:min(550px,86%);order:0}
 .bt-q-dock{width:100%;display:flex;justify-content:center}
 .bt-q-dock .bt-q{margin:0 auto 8px}
+/* A Bot's question in a room: an accent bar, a pill naming the asker, and one muted line
+   where an answered, closed or replaced card stood. */
+.bt-q-group{position:relative;display:flex;flex-direction:column;gap:6px;width:100%;min-width:0;box-sizing:border-box;margin:4px 0 6px;padding-left:12px}
+.bt-q-group::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:3px;border-radius:999px;background:var(--bt-accent)}
+.bt-q-group .bt-q{width:100%;min-width:0}
+.bt-q-group-raised{width:calc(var(--dsh-chat-content-width,748px) - 32px);max-width:calc(100% - 32px);margin:0 auto}
+.bt-q-group-pill{align-self:flex-start;max-width:100%;height:20px;padding:0 8px;border-radius:999px;background:var(--bt-hover);color:var(--bt-ink-2);font-size:12px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-q-group-record{display:flex;flex-direction:row;align-items:center;gap:8px;margin:4px 0;padding:4px 0 4px 12px}
+.bt-q-group-question{flex:1 1 auto;min-width:0;color:var(--bt-ink-2);font-size:13px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-q-group-record .bt-q-group-pill,.bt-q-group-record .bt-q-badge{flex:none}
+.bt-q-group-superseded{opacity:.6}
+.bt-q-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--bt-accent)}
 [class*="_toBottomSlot"]{justify-content:center!important;padding-right:0!important}
 [data-conversation-scroll] [class*="_toBottomSlot"]{bottom:calc(var(--dsh-composer-height,152px) + 8px)!important}
 [class*="_toBottomSlot"]>button{width:36px!important;height:36px!important;margin-top:-36px!important;background:var(--bt-main)!important;color:var(--bt-ink)!important;box-shadow:0 0 0 .5px var(--bt-line-2),0 2px 8px -2px rgba(0,0,0,.12)!important;animation:bt-tobottom-in ${SPRING_TAP.duration}ms ${SPRING_TAP.easing},bt-veil-in .16s ease-out;transition:background-color .12s ease,${spring(SPRING_TAP, 'scale')}}

@@ -12,6 +12,7 @@ import { MemoryRow } from './memory-panel.js'
 import { ScheduleSummary } from './schedules.js'
 import { Segmented, useGlide, useMorph } from './motion.js'
 import { MemberWork, useMemberWork } from './member-status.js'
+import { permissionLabel } from './permissions-page.js'
 import { t } from './i18n.js'
 
 function transcriptOf(list, id, name, hiddenTurns = []) {
@@ -34,31 +35,41 @@ const EMPTY_TABS = { ids: [], active: null }
 
 // The Bot's browser inside the details page: its tabs as small window cards on
 // Desktop, a pointer there on web.
-const PERMISSION_LABELS = { 'read-only': 'Read only', 'workspace-write': 'Workspace', 'danger-full-access': 'Full access' }
 const DANGER = new Set(['danger-full-access'])
 
-// The Bot's permission preset, from the presets DeepSeek Harness offers.
+// The Bot's permission preset, from the presets DeepSeek Harness offers. Without its
+// own preset it shows the one it inherits: the global policy, or the DSH default.
 function PermissionRow({ bot, roster, actions, run }) {
-  const [pending, setPending] = useState(null)
+  const [pending, setPending] = useState()
   const catalog = roster.permissions
-  const saved = bot.permission ?? catalog?.defaultPreset
-  useEffect(() => { if (pending === saved) setPending(null) }, [pending, saved])
-  if (!catalog?.options?.length) return null
-  const current = pending ?? saved
+  const options = catalog?.options ?? []
+  const inherited = catalog?.global ?? roster.prefs?.permission ?? catalog?.defaultPreset
+  const saved = bot.permission || inherited
+  useEffect(() => { if (pending !== undefined && pending === saved) setPending(undefined) }, [pending, saved])
+  if (!options.length) return null
+  const current = pending !== undefined ? pending : saved
   const pick = (value) => {
     // A Bot without its own preset may run on another one set in DSH, so its first pick always applies.
-    if (value === current && bot.permission !== undefined) return
+    if (value === current && bot.permission) return
     setPending(value)
-    void run(actions.updateBot(bot.id, { permission: value })).catch(() => setPending(null))
+    void run(actions.updateBot(bot.id, { permission: value })).then(ok => { if (!ok) setPending(undefined) })
   }
+  const follows = !bot.permission
+  const line = follows
+    ? inherited !== undefined
+      ? t('Permissions · Following {name}', { name: permissionLabel(options.find(candidate => candidate.value === inherited), inherited) })
+      : t('Permissions · Following the DeepSeek Harness default')
+    : t('Permissions · This Bot has its own preset. Set the rest in Settings → Permissions.')
   return h('div', { className: 'bt-drawer-permission' },
     h('div', { className: 'bt-section-title' }, t('Permissions')),
     h(Segmented, { label: t('Permissions'), value: current },
-      catalog.options.map(option => h('button', {
+      options.map(option => h('button', {
         key: option.value, type: 'button', 'aria-pressed': option.value === current,
         title: option.description, onClick: () => pick(option.value),
+        'data-permission': `bot:${bot.id}`,
         className: DANGER.has(option.value) ? 'bt-perm-danger' : undefined,
-      }, PERMISSION_LABELS[option.value] ? t(PERMISSION_LABELS[option.value]) : option.name))))
+      }, permissionLabel(option, option.value)))),
+    h('div', { className: 'bt-note' }, line))
 }
 
 function BrowserCards({ bot, sessionId, roster, actions, useBrowserTabs, useBrowserPages }) {

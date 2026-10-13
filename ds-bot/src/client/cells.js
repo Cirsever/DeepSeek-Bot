@@ -5,7 +5,7 @@ import { inkText } from './inks.js'
 import { linkMentions, mentionTarget, dayLabel, contentText, stripHeader, isHiddenTurn, relaysBefore, relayPart, commRunOf, toolName, toolArgs, reminderPrompts } from './text.js'
 import { SmileIcon, ReplyIcon, DotsIcon, CheckIcon, DownloadIcon, CopyIcon, MemoryIcon } from './icons.js'
 import { colorOf, toolState, BotMark, RoomAvatar } from './mark.js'
-import { AnsweredCell, SettledQuestion, PendingQuestion } from './questions.js'
+import { AnsweredCell, GroupQuestionCard, SettledQuestion, PendingQuestion } from './questions.js'
 import { SecretToolCell } from './secret-card.js'
 import { dateLocale, t } from './i18n.js'
 import { failureLabel } from './diagnostics.js'
@@ -634,6 +634,17 @@ export function ToolCell({ node, sessionId, useRoster, useUi, useWork, actions }
       return h(GroupEvent, { prefix: t(verbs[0]), room: tool === 'delete_group' ? undefined : room, name, roster, actions })
     }
     case 'ask_user': {
+      // A room keeps its cards in `roster.roomQuestions`, keyed by room id — an older card
+      // still renders its record here, so the anchor is the call it was asked from.
+      const room = roster.roomsById[sessionId]
+      if (room !== undefined) {
+        const card = (roster.roomQuestions?.[sessionId] ?? []).find(entry => entry.callId === root.callId)
+        if (!card) return h('span', { className: 'bt-q-gone', hidden: true })
+        return h(GroupQuestionCard, {
+          roomId: sessionId, card, actions, inline: true,
+          askedBy: roster.byId[card.botId]?.name ?? t('a Bot'),
+        })
+      }
       const question = roster.questions?.[sessionId]
       // Answered or closed: the card leaves no gap where it was.
       if (!question || question.callId !== root.callId) return h('span', { className: 'bt-q-gone', hidden: true })

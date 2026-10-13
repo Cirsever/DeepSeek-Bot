@@ -6,6 +6,13 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ### Added
 
+- A Bot that needs a decision from you in a group chat posts a question card with buttons instead of burying the options in prose. The card names the asking Bot, stays under its message and above the message box, and its answer is posted in the group as a normal message that wakes the Bot. One card is open per group: a newer question supersedes the older one, which stays in the group marked as superseded. Private chats are unchanged.
+- Settings → Permissions sets a global permission policy for the team, and one Bot can override it in its details panel. The page lists every preset DSH offers, including the auto-approval level (full access), or **Follow the DSH default**. A change to the global policy is applied at once to the private chat and the group chats of every Bot without an override. **Auto review** follows DSH: a Bot can be given it, but it is not offered as the global default.
+
+## [0.1.3] - 2026-10-12
+
+### Added
+
 - In a Bot's chat or a group chat, `@` lists the Bots you can mention first: a group's members and **Everyone**, or the other Bots. Picking one writes `@Name`.
 - **Reference a chat** in the composer's **+** menu adds another Bot's chat, or a recent conversation outside the team, to your message as context.
 - A Main Bot can stop another Bot's running turn. The Bot is told why, and its reply goes back to the Main Bot.
@@ -105,7 +112,8 @@ If you used the legacy `dsh-bot` package, remove it before you install `ds-bot`.
 - Only one DSH can change a team at a time; a second DSH on the same DSH home opens it read-only ([Data and backups](ds-bot/README.md#data-and-backups)).
 - Group chats use many tokens: each member reads the group and answers in turn.
 
-[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Fei2411/DeepSeek-Bot/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Fei2411/DeepSeek-Bot/releases/tag/v0.1.0

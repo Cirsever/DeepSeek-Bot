@@ -25,7 +25,7 @@ First install DSH and set up at least one model in it. DS Bot uses the models fr
 2. In **Package name or address**, enter `ds-bot`. In mainland China, set **Registry** to **Mainland China mirror**.
 3. Select **Install**, then **Enable now**. If DSH says the change takes effect at the next start, quit DSH completely and open it again.
 
-If npm is not reachable, in step 2 you can also enter the full path of `ds-bot-0.1.2.tgz` downloaded from [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases), or `github:Fei2411/DeepSeek-Bot#v0.1.2&path:/ds-bot` (needs Git).
+If npm is not reachable, in step 2 you can also enter the full path of `ds-bot-0.1.3.tgz` downloaded from [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases), or `github:Fei2411/DeepSeek-Bot#v0.1.3&path:/ds-bot` (needs Git).
 
 **DSH Web (Windows, macOS, Linux)**
 
@@ -60,6 +60,8 @@ In short: have a question? Ask the main bot.
 
 DS Bot has group chats. A group chat is a great way to get several bots to work together, but it clearly costs more. So DS Bot does this: every group chat has an admin. The admin answers your messages by default and calls in the other bots for you. You can also @ a bot directly, and it answers you directly: type @ and pick the bot from the list. To give the bots another chat as context, use + → Reference a chat in the message box.
 
+**When a Bot needs you to decide**, it posts a question card instead of burying the options in a paragraph: the card names the Bot that is asking, and every option is a button. It stays under that Bot's message and above the message box, so scrolling never hides it, and the group is marked until you answer. Your answer is posted in the group like any other message and wakes the Bot that asked. One question is open per group: if another Bot asks, the older card stays in the group, marked as superseded. Private chats are unchanged.
+
 ![Group chat: the admin, Chief, hands the work to Writer and Coder](docs/images/group.png)
 
 ### Usage
@@ -67,6 +69,15 @@ DS Bot has group chats. A group chat is a great way to get several bots to work 
 In **Settings** → **Usage**, you can see token usage by time, by bot and by model.
 
 ![Usage page](docs/images/usage.png)
+
+### Permissions
+
+In **Settings** → **Permissions** you set the permission policy for the team. It has two levels:
+
+- **Global default**: the policy every bot follows when it has no policy of its own. **Follow the DSH default** leaves the choice to DSH and sends no preset.
+- **Per-bot override** (the bot's details panel): one bot can deviate from the global default, and it wins.
+
+The page lists every preset DSH offers, including the auto-approval level (full access, `approval: never`). **Auto review** follows DSH exactly: a bot can be given it, since DSH sets it one session at a time, but it is not offered as the global default. Changing the global default re-applies it at once to the private chat and the group chats of every bot that has no override of its own.
 
 ## Data
 

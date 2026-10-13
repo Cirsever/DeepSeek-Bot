@@ -25,7 +25,7 @@ DeepSeek Bot（简称 DS Bot）是一个基于 [DeepSeek Harness](https://github
 2. **包名或地址** 填 `ds-bot`。在中国大陆，**安装源** 选 **中国大陆镜像源**。
 3. 点 **安装**，再点 **立即启用**。如果提示“下次启动生效”，完全退出 dsh 再打开。
 
-连不上 npm 时，第 2 步也可以填 [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases) 里下载的 `ds-bot-0.1.2.tgz` 的完整路径，或者 `github:Fei2411/DeepSeek-Bot#v0.1.2&path:/ds-bot`（需要装 Git）。
+连不上 npm 时，第 2 步也可以填 [Releases](https://github.com/Fei2411/DeepSeek-Bot/releases) 里下载的 `ds-bot-0.1.3.tgz` 的完整路径，或者 `github:Fei2411/DeepSeek-Bot#v0.1.3&path:/ds-bot`（需要装 Git）。
 
 **dsh Web（Windows、macOS、Linux）**
 
@@ -60,6 +60,8 @@ npx @deepseek-ai/dsh@0.2.1-alpha.1 web
 
 ds bot 拥有群聊功能。群聊是非常好的多 bot 协作方式，但它会带来非常明显的费用问题。ds bot 为此特意做了优化：在一个群聊中，你需要设置一个管理员。你的消息默认由管理员回复，它会帮你调用其他 bot。你也可以直接 @ 你需要沟通的 bot，它会直接回应你：输入 @，从列表里选 bot 就行。想让 bot 参考另一段对话，点输入框的 + → 引用对话。
 
+**Bot 需要你做抉择时**，会发一张卡片，而不是把选项埋进段落里：卡片标清是哪个 bot 在问，每个选项都是一个按钮。它固定在该 bot 那条消息下方、输入框上方，滚到哪都看得见；没回答之前群里会亮一个小圆点。你的回答会像普通消息一样发在群里，并唤醒提问的 bot。一个群同时只有一张未决卡片：如果另一个 bot 又问，旧卡会留在群里并标注「已被取代」。私聊行为不变。
+
 ![群聊：管理员 Chief 把活派给写手和程序员](docs/images/group.zh.png)
 
 ### 用量
@@ -67,6 +69,15 @@ ds bot 拥有群聊功能。群聊是非常好的多 bot 协作方式，但它�
 在 设置 → 用量 里，可以按时间、按 bot、按模型查看 Token 用量。
 
 ![用量页](docs/images/usage.zh.png)
+
+### 权限策略
+
+在 **设置** → **权限** 里可以设置整个团队的权限策略，分两层：
+
+- **全局默认**：没有单独设置的 bot 都用它。选 **跟随 dsh 默认**，就交给 dsh 决定，不下发任何预设。
+- **单个 bot 覆盖**（在 bot 详情页里）：某个 bot 可以不走全局默认，此时以它的设置为准。
+
+页面会列出 dsh 提供的全部预设，包括自动批准档（完全访问，`approval: never`）。**自动评审** 与 dsh 保持一致：它可以设给某个 bot（dsh 按单个会话下发），但不会出现在全局默认的可选项里。改全局默认后，所有没有单独覆盖的 bot，其私聊和群聊都会立刻重新应用新策略。
 
 ## 数据
 

@@ -181,6 +181,64 @@ export function QuestionDock({ sessionId, useRoster, actions }) {
   return h(PendingQuestion, { sessionId, question, actions, inline: false })
 }
 
+// One card a Bot asked in a group chat. The host keeps every card of a room in
+// `roster.roomQuestions[roomId]`, newest first, at most one `live`; an older card stays in
+// the room as its record instead of disappearing. The pick is kept locally so the card
+// closes at once, before the roster round-trip.
+export function GroupQuestionCard({ roomId, card, askedBy, actions, inline }) {
+  const [answer, setAnswer] = useState(null)
+  const [dismissed, setDismissed] = useState(false)
+  const onAnswer = (given) => {
+    const next = { selected: given.selected ?? [], ...(given.custom ? { custom: given.custom } : {}) }
+    const sent = actions.answerRoomQuestion?.(roomId, card.id, { selected: next.selected, custom: next.custom ?? '' })
+    if (!sent) return
+    setAnswer(next)
+    void sent.catch(() => setAnswer(null))
+  }
+  const onDismiss = () => {
+    const sent = actions.dismissRoomQuestion?.(roomId, card.id)
+    if (!sent) return
+    setDismissed(true)
+    void sent.catch(() => setDismissed(false))
+  }
+  if (card.live === true && answer === null && !dismissed) {
+    return h('div', { className: inline ? 'bt-q-group' : 'bt-q-group bt-q-group-raised' },
+      h('div', { className: 'bt-q-group-pill' }, t('Needs your decision · {name}', { name: askedBy })),
+      h(QuestionView, { key: card.id, question: card, onAnswer, onDismiss, ownAnswer: card.allowCustom === true, raised: !inline }))
+  }
+  return h(GroupQuestionRecord, {
+    card,
+    askedBy,
+    answer: answer ?? card.answer ?? null,
+    dismissed: dismissed || card.dismissed === true,
+  })
+}
+
+// What is left where an answered, closed or replaced card stood: one muted line, so the
+// room keeps the record without the card.
+function GroupQuestionRecord({ card, askedBy, answer, dismissed }) {
+  const chosen = [...(answer?.selected ?? []), ...(answer?.custom ? [answer.custom] : [])]
+  const kind = dismissed ? 'dismissed' : card.superseded === true ? 'superseded' : 'answered'
+  const badge = kind === 'dismissed' ? t('Closed')
+    : kind === 'superseded' ? t('Superseded by another question')
+      : chosen.length > 0 ? t('You chose: {answer}', { answer: chosen.join(', ') }) : t('Answered')
+  return h('div', { className: `bt-q-group bt-q-group-record bt-q-group-${kind}`, 'data-question': card.id },
+    h('span', { className: 'bt-q-group-pill' }, askedBy),
+    h('span', { className: 'bt-q-group-question' }, card.question),
+    h('span', { className: 'bt-q-badge' }, badge))
+}
+
+// The live card of the open room, raised above the composer, so the question stays in
+// sight wherever the transcript is scrolled. Rooms only: a Bot conversation has none.
+export function GroupQuestionDock({ sessionId, useRoster, actions }) {
+  const room = useRoster(value => value.roomsById?.[sessionId])
+  const cards = useRoster(value => value.roomQuestions?.[sessionId])
+  const card = cards?.find(entry => entry.live === true)
+  const askedBy = useRoster(value => (card ? value.byId?.[card.botId]?.name : undefined))
+  if (room === undefined || card === undefined) return null
+  return h(GroupQuestionCard, { roomId: sessionId, card, askedBy: askedBy ?? t('a Bot'), actions, inline: false })
+}
+
 // An answered card in the transcript: the question stays where it was asked, with the
 // answer marked.
 export function AnsweredCell({ node }) {

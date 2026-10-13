@@ -12,7 +12,7 @@ import { ComposerPlus, ComposerVoice, menuIcons } from './composer.js'
 import { CHATS_SOURCE, atSources } from './at-menu.js'
 import { VOICE_BUNDLE } from './speech.js'
 import { sameVersion } from './dsh-offer.js'
-import { AnsweredCell, QuestionCard, QuestionDock } from './questions.js'
+import { AnsweredCell, GroupQuestionDock, QuestionCard, QuestionDock } from './questions.js'
 import { AssistantCell, TriggerCell, TurnProcessCell, Nothing, TurnTailCell, ToolCell } from './cells.js'
 import { Overlays } from './overlays.js'
 import { createBotBrowsers, serveBrowserReads } from './bot-browsers.js'
@@ -543,6 +543,9 @@ export function apply(ctx) {
     send: (sessionId, text) => after(call('send', { sessionId: partFor(sessionId), text })),
     answerQuestion: (sessionId, questionId, answer) => after(call('answer-question', { sessionId: partFor(sessionId), questionId, answer })),
     dismissQuestion: sessionId => after(call('dismiss-question', { sessionId })),
+    // A room's card is keyed by the room itself, and its answer is a message in the room.
+    answerRoomQuestion: (roomId, questionId, answer) => after(call('answer-room-question', { roomId, questionId, answer })),
+    dismissRoomQuestion: (roomId, questionId) => after(call('dismiss-question', { roomId, questionId })),
     answerApproval: (id, choice) => after(call('approval-answer', { id, choice })),
     // Values go out in these requests and never come back in a response.
     secretSet: payload => after(call('secret-set', payload)),
@@ -809,6 +812,9 @@ export function apply(ctx) {
     shadow('conversation.input.dock', { id: 'bot-members', order: -120, inject: face }, MemberDock),
     shadow('conversation.input.dock', { id: 'bot-model', order: -110, inject: face }, ModelChoiceDock),
     shadow('conversation.input.dock', { id: 'bot-question', order: -100, inject: face }, QuestionDock),
+    // The same card as the room's transcript shows, raised so it stays in sight while the
+    // user scrolls. Renders nothing outside a room.
+    shadow('conversation.input.dock', { id: 'bot-room-question', order: -99, inject: face }, GroupQuestionDock),
     shadow('conversation.input.dock', { id: 'bot-secret', order: -90, inject: face }, SecretDock),
   ]
   // The return button belongs to neither group: it renders only in Agent mode.

@@ -7,6 +7,8 @@ import { unquote } from './text.js'
 
 export const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 export const GROUP_REF = { type: 'string', required: true, description: 'Exact group chat name from list_bots' }
+// Cards a room keeps: the client can render the last few, and the state payload stays small.
+const ROOM_QUESTION_KEEP = 5
 const MODE_PARAM = {
   type: 'string',
   enum: ROOM_MODES,
@@ -390,8 +392,8 @@ export function install(rt) {
     async execute(args, exec) {
       await rt.load()
       const id = exec.agent?.id
-      if (rt.groupOwners.has(id)) return 'Question cards only work in your own chat. In a group, ask in your message instead.'
-      if (!rt.chatOwners.has(id)) return 'Only Bots on the team can use ask_user.'
+      const owner = rt.groupOwners.get(id)
+      if (owner === undefined && !rt.chatOwners.has(id)) return 'Only Bots on the team can use ask_user.'
       const options = (Array.isArray(args.options) ? args.options : [])
         .map(option => (typeof option === 'string' ? { label: option } : option ?? {}))
         .map(option => ({
@@ -405,15 +407,32 @@ export function install(rt) {
       // composer dock, which takes questions without a call.
       const turn = rt.live.get(id)?.turn
       const hidden = turn !== undefined && (state.exchangeTurns[id] ?? []).includes(turn)
-      state.questions[id] = {
-        id: randomUUID(),
-        ...(exec.callId && !hidden ? { callId: exec.callId } : {}),
+      const questionId = randomUUID()
+      const callId = exec.callId && !hidden ? exec.callId : undefined
+      const card = {
+        id: questionId,
         question: String(args.question ?? '').trim(),
         ...(args.detail ? { detail: String(args.detail).trim() } : {}),
         options,
         multiSelect: args.multiSelect === true,
         ...(args.allowCustom === true ? { allowCustom: true } : {}),
         askedAt: Date.now(),
+      }
+      if (owner !== undefined) {
+        state.roomQuestions ??= {}
+        const cards = state.roomQuestions[owner.roomId] ?? []
+        for (const older of cards) {
+          if (older.live === true) {
+            older.live = false
+            older.superseded = true
+          }
+        }
+        // A group Session has no own-chat dock, so the card always carries the call it
+        // anchors to; the newest card is first, so the cap cannot drop the live one.
+        cards.unshift({ ...card, callId: callId ?? questionId, botId: owner.botId, live: true })
+        state.roomQuestions[owner.roomId] = cards.slice(0, ROOM_QUESTION_KEEP)
+      } else {
+        state.questions[id] = { ...card, ...(callId === undefined ? {} : { callId }) }
       }
       await rt.save()
       exec.concludeTurn?.()
