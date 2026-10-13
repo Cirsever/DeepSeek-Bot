@@ -469,6 +469,9 @@ var ZH = {
   "{name} is typing…": "{name} 正在输入…",
   "{name} didn't answer in time": "{name} 没有及时回应",
   "{name} paused for your approval": "{name} 停下来等你批准",
+  "{name} was cut off by a restart and picked its work back up": "{name} 的工作被重启打断，已经接着做",
+  "{name} was cut off by a restart again and stopped": "{name} 的工作又被重启打断，已停下",
+  "Picked up its work after a restart": "重启后接着做之前的工作",
   "{name} is waiting for your approval": "{name} 等你批准",
   "{first} and {second} are waiting for your approval": "{first}、{second} 等你批准",
   "{first}, {second} and {count} more are waiting for your approval": "{first}、{second} 等 {total} 个等你批准",
@@ -4050,8 +4053,9 @@ function TriggerCell({ node, sessionId, useRoster, useSessions, useTurnClock, us
       if (source.handoff === true) return roster.roomsById[sessionId] ? null : (0, import_react6.createElement)(EarlierParts, { sessionId, roster, actions });
       if (source.role === "kickoff" || source.role === "room") return null;
       if (source.role === "secret" || deferred) return null;
+      if (source.role === "resume") return (0, import_react6.createElement)("div", { className: "bt-event" }, t("Picked up its work after a restart"));
       if (source.role === "post") {
-        if (source.failed !== void 0) return null;
+        if (source.failed !== void 0 || source.resumed === true) return null;
         const room2 = roster.roomsById[sessionId];
         const poster = roster.byId[source.senderSessionId] ?? { id: source.senderSessionId, name: source.senderName ?? t("a Bot"), color: "gray" };
         return (0, import_react6.createElement)(GroupMessage, { bot: poster, text: stripHeader(contentText(data.content)), room: room2, roster, actions, msgKey: `${sessionId}:${data.turn}:post`, useUi });
@@ -4300,6 +4304,12 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
       }
       if (reply.kind === "missed") {
         return (0, import_react6.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} didn't answer in time", { name: bot.name }));
+      }
+      if (reply.kind === "resumed") {
+        return (0, import_react6.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} was cut off by a restart and picked its work back up", { name: bot.name }));
+      }
+      if (reply.kind === "cut") {
+        return (0, import_react6.createElement)("div", { key: `${reply.botId}-${index}`, className: "bt-event" }, t("{name} was cut off by a restart again and stopped", { name: bot.name }));
       }
       if (reply.kind === "approval") {
         return (0, import_react6.createElement)(
