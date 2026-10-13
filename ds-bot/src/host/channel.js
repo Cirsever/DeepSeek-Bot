@@ -40,7 +40,7 @@ export function install(rt) {
       ...bot, sessionId: rt.chatOf(bot.id), parts: (segments ?? []).map(segment => segment.sessionId), ...(kickoff ? { waiting: true } : {}),
     })),
     // `parts`: the members' hidden group Sessions and their earlier segments, for usage.
-    rooms: Object.values(state.rooms).map(({ log, seen, botRounds, sessions, segments, ...room }) => {
+    rooms: Object.values(state.rooms).map(({ log, seen, botRounds, lateRounds, sessions, segments, ...room }) => {
       const parts = [...Object.values(sessions ?? {}), ...Object.values(segments ?? {}).flat().map(segment => segment.sessionId)]
       const last = (log ?? []).filter(line => line.kind === undefined).at(-1)
       return { ...room, parts, ...(last ? { preview: last.who === 'User' ? last.text : `${last.who}：${last.text}` } : {}) }
@@ -68,10 +68,11 @@ export function install(rt) {
   })
   // What changes without a new revision, sent with every state answer. `memoryNews`:
   // per Bot, its latest memory change; `memoryReviews`: memory reviews waiting or
-  // running; `work`: per Bot, the turn it runs and its tool, and the approvals waiting.
+  // running; `work`: per Bot, the turn it runs and its tool; per group, the members whose
+  // turn there runs; and the approvals waiting.
   const live = () => ({
     activity: rt.activityView(),
-    work: { bots: rt.workView(), approvals: rt.approvalsView() },
+    work: { bots: rt.workView(), rooms: rt.roomWorkView(), approvals: rt.approvalsView() },
     memoryNews: rt.memoryNews(),
     memoryReviews: rt.memoryReviews(),
     connectors: rt.connectorsView(),
@@ -207,6 +208,8 @@ export function install(rt) {
         case 'approval-answer':
           rt.answerApproval(body.id, body.choice)
           return ok(true)
+        case 'stop-member-work':
+          return ok(await rt.stopMemberWork(String(body.roomId ?? ''), String(body.botId ?? '')))
         case 'dismiss-question':
           await rt.load()
           if (state.questions[body.sessionId] !== undefined) {
