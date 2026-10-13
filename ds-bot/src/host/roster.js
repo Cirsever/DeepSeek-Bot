@@ -189,7 +189,10 @@ export function install(rt) {
       }
       modelChanged = true
     }
-    if (patch.permission !== undefined) await rt.setPermission(bot, patch.permission)
+    if (patch.permission !== undefined) {
+      if (patch.permission === null || patch.permission === '') await rt.clearPermission(bot)
+      else await rt.setPermission(bot, patch.permission)
+    }
     await rt.save()
     if (modelChanged) await rt.applyModel(bot, { force: true })
     if (bot.model && bot.kickoff !== undefined) {

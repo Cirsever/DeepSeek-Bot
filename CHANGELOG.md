@@ -4,6 +4,11 @@ All notable changes to DS Bot are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+### Added
+
+- A Bot that needs a decision from you in a group chat posts a question card with buttons instead of burying the options in prose. The card names the asking Bot, stays under its message and above the message box, and its answer is posted in the group as a normal message that wakes the Bot. One card is open per group: a newer question supersedes the older one, which stays in the group marked as superseded. Private chats are unchanged.
+- Settings → Permissions sets a global permission policy for the team, and one Bot can override it in its details panel. The page lists every preset DSH offers, including the auto-approval level (full access), or **Follow the DSH default**. A change to the global policy is applied at once to the private chat and the group chats of every Bot without an override. **Auto review** follows DSH: a Bot can be given it, but it is not offered as the global default.
+
 ## [0.1.3] - 2026-10-12
 
 ### Added

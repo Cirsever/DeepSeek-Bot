@@ -12,6 +12,7 @@ import { GroupSettingsForm, NewGroupForm } from './group-settings.js'
 import { CreateBot } from './create-bot.js'
 import { KeyIcon, SecretsPage } from './secret-card.js'
 import { UsagePage } from './usage-page.js'
+import { PermissionIcon, PermissionsPage } from './permissions-page.js'
 import { ConnectorsPage } from './connectors.js'
 import { SchedulesPage } from './schedules.js'
 import { FeedbackIcon, FeedbackPage } from './feedback.js'
@@ -22,8 +23,8 @@ const capitalize = word => word[0].toUpperCase() + word.slice(1)
 
 // Settings dialog: a 198px page list beside the page. Bots and group chats each list
 // their members, and one opens on its own settings form. Usage widens the dialog.
-const SETTINGS_PAGES = [['general', 'General'], ['bots', 'Bots'], ['groups', 'Group chats'], ['connectors', 'Connectors'], ['schedules', 'Scheduled tasks'], ['usage', 'Usage'], ['secrets', 'Secrets'], ['feedback', 'Feedback'], ['about', 'About DS Bot']]
-const PAGE_ICONS = { ...SETTINGS_ICONS, connectors: ConnectorIcon, schedules: ClockIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon }
+const SETTINGS_PAGES = [['general', 'General'], ['bots', 'Bots'], ['groups', 'Group chats'], ['connectors', 'Connectors'], ['schedules', 'Scheduled tasks'], ['permissions', 'Permissions'], ['usage', 'Usage'], ['secrets', 'Secrets'], ['feedback', 'Feedback'], ['about', 'About DS Bot']]
+const PAGE_ICONS = { ...SETTINGS_ICONS, connectors: ConnectorIcon, schedules: ClockIcon, permissions: PermissionIcon, secrets: KeyIcon, feedback: FeedbackIcon, about: InfoIcon }
 
 function SetSection({ title, children }) {
   return h('section', { className: 'bt-set-section' }, h('h3', null, title), h('div', { className: 'bt-set-card' }, children))
@@ -202,6 +203,7 @@ export function SettingsDialog({ page, id, roster, actions, useUpdate, leaving =
           room ? h('div', { className: 'bt-settings-form' }, h(GroupSettingsForm, { key: room.id, room, roster, actions, run })) : null,
           shown === 'groups' && !room ? h(GroupsPage, { roster, actions, run }) : null,
           shown === 'connectors' ? h(ConnectorsPage, { roster, actions }) : null,
+          shown === 'permissions' ? h(PermissionsPage, { roster, actions, run, Section: SetSection, Row: SetRow }) : null,
           shown === 'schedules' ? h(SchedulesPage, { roster, actions, start: id ?? undefined }) : null,
           shown === 'secrets' ? h(SecretsPage, { roster, actions, run, Section: SetSection }) : null,
           shown === 'feedback' ? h(FeedbackPage, { actions, run, Section: SetSection, Row: SetRow }) : null,

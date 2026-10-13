@@ -1,7 +1,7 @@
 // Client channel: the team view the browser renders, and the POST /api/bot endpoints.
 import { randomUUID } from 'node:crypto'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { questionReply } from './parts.js'
+import { questionReply, readReply } from './parts.js'
 import { COLORS, EXTRA_COLORS, ROUTE } from './constants.js'
 
 const LANGUAGES = { zh: 'Chinese (简体中文)', en: 'English' }
@@ -47,6 +47,8 @@ export function install(rt) {
     }),
     exchangeTurns: state.exchangeTurns,
     questions: state.questions,
+    // Per room: its question cards, newest first; at most one is live.
+    roomQuestions: state.roomQuestions ?? {},
     // The team's DSH Agent (at most one): plain dsh Sessions, not Bots.
     agents: Object.values(state.agents),
     // Key names and who may use them; values never leave the host.
@@ -79,7 +81,7 @@ export function install(rt) {
   // Updates change the dsh profile, not the team, so a reading host may run them too.
   const READS = new Set(['state', 'models', 'efforts', 'earlier', 'room-progress', 'exchange', 'usage', 'schedules', 'memory-view', 'browser-wait', 'browser-result', 'diagnostics', 'diagnostics-log', 'diagnostics-clear', 'update-check', 'update-install', 'dsh-update-install', 'repo-stars', 'approval-answer'])
 
-  function setPrefs(body) {
+  async function setPrefs(body) {
     if (body.theme !== undefined) {
       if (typeof body.theme !== 'string' || !/^[a-z][\w-]{0,31}$/.test(body.theme)) throw invalid('Unknown theme')
       state.prefs.theme = body.theme
@@ -93,6 +95,16 @@ export function install(rt) {
       if (body.motion === null || body.motion === 'normal') delete state.prefs.motion
       else if (body.motion === 'quiet' || body.motion === 'lively') state.prefs.motion = body.motion
       else throw invalid('Motion must be quiet, normal or lively')
+    }
+    if (body.permission !== undefined) {
+      if (body.permission === null || body.permission === '') await rt.setGlobalPermission(null)
+      else if (typeof body.permission === 'string') {
+        const catalog = rt.permissionCatalog?.()
+        const wanted = body.permission.trim()
+        if (catalog !== undefined && !catalog.defaultOptions.some(option => option.value === wanted)) throw invalid('Unknown permission preset')
+        await rt.setGlobalPermission(body.permission)
+      }
+      else throw invalid('Permission must be a preset name')
     }
     return rt.save()
   }
@@ -205,13 +217,21 @@ export function install(rt) {
         case 'approval-answer':
           rt.answerApproval(body.id, body.choice)
           return ok(true)
-        case 'dismiss-question':
+        case 'dismiss-question': {
           await rt.load()
-          if (state.questions[body.sessionId] !== undefined) {
+          const cards = typeof body.roomId === 'string' ? state.roomQuestions?.[body.roomId] : undefined
+          const card = (Array.isArray(cards) ? cards : []).find(item => item.id === body.questionId && item.live === true)
+          if (card !== undefined) {
+            card.live = false
+            card.dismissed = true
+            card.dismissedAt = Date.now()
+            await rt.save()
+          } else if (state.questions[body.sessionId] !== undefined) {
             delete state.questions[body.sessionId]
             await rt.save()
           }
           return ok(true)
+        }
         case 'secret-set':
         case 'secret-allow':
         case 'secret-cancel':
@@ -251,6 +271,39 @@ export function install(rt) {
             await ctx.sessions.flush(agent.session)
           } catch (error) {
             state.questions[sessionId] ??= question
+            throw error
+          }
+          await rt.save()
+          return ok(true)
+        }
+        case 'answer-room-question': {
+          if (typeof body.roomId !== 'string' || typeof body.questionId !== 'string') return fail('Nothing to send', 'bot/invalid')
+          await rt.load()
+          const cards = state.roomQuestions?.[body.roomId]
+          const question = (Array.isArray(cards) ? cards : []).find(card => card.id === body.questionId && card.live === true)
+          if (question === undefined) return fail('This question is no longer open', 'bot/stale')
+          const reply = questionReply(question, body.answer)
+          if (reply === undefined) return fail('Nothing to send', 'bot/invalid')
+          // Claim the card before queueing so a second answer is refused.
+          question.live = false
+          question.answer = readReply(reply.text)?.answers[0] ?? {}
+          question.answeredAt = Date.now()
+          try {
+            const asker = rt.botOf(question.botId)
+            // The answer is the user's line in the group; naming the asker as a
+            // reference is what makes the room's round come back to it.
+            rt.queueRoomMessage(body.roomId, {
+              text: reply.text,
+              ...(asker === undefined ? {} : { references: [{ labels: [asker.name], text: reply.text }] }),
+            })
+            // Queueing alone waits for the room's next round, so the answer also starts one.
+            const agent = await rt.resolveAgent(body.roomId)
+            agent.followup(createUserMessage({ content: [{ type: 'text', text: reply.text }], source: { ...reply.source, roomId: body.roomId } }))
+            await ctx.sessions.flush(agent.session)
+          } catch (error) {
+            question.live = true
+            delete question.answer
+            delete question.answeredAt
             throw error
           }
           await rt.save()

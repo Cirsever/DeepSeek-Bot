@@ -89,6 +89,9 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     return () => { delete document.body.dataset.btRoom }
   }, [Boolean(room)])
   const memoryNotice = notice && changed !== null && roster.memory !== false
+  // The room's live card is not in the unread state the shell tracks, so the header marks
+  // it itself, next to the name.
+  const asked = room !== undefined && (roster.roomQuestions?.[sessionId] ?? []).some(card => card.live === true)
   return h('div', { className: 'bt-head' },
     h('button', {
       type: 'button', className: 'bt-pill', 'aria-expanded': detailsOpen, 'data-memory': memoryNotice ? 'updated' : undefined,
@@ -98,9 +101,10 @@ export function HeaderPill({ sessionId, useRoster, useSessions, useSessionStatus
     bot ? h(BotAvatar, { bot, size: 24, state: botState(running, doing, roster.questions?.[currentPart(bot)] !== undefined), badge: false })
       : room ? h(RoomAvatar, { room, roster, size: 24 }) : null,
     h('span', { className: 'bt-pill-name' }, bot?.name ?? room?.name ?? (title || t('New chat'))),
+    asked ? h('span', { className: 'bt-q-dot', title: t('Waiting for your answer'), 'aria-hidden': true }) : null,
     h(MemoryNotice, { shown: memoryNotice }),
     h('span', { className: 'bt-pill-go', 'aria-hidden': true }, h(GoArrow))),
-    h('span', { className: 'bt-sr', role: 'status' }, memoryNotice ? t('Memory updated') : ''),
+    h('span', { className: 'bt-sr', role: 'status' }, asked ? t('Waiting for your answer') : memoryNotice ? t('Memory updated') : ''),
     h(NewMessagePills, { key: sessionId, sessionId, useSessions, useUi, useTurnClock }),
     h(ActivityIndicator, { key: `activity:${sessionId}`, sessionId, useRoster, useSessionStatus, useSession, useLive, actions }))
 }

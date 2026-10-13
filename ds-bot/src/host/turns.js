@@ -291,6 +291,16 @@ export function install(rt) {
             delete state.questions[id]
             void rt.save().catch(() => {})
           }
+          // A plain group message closes the room's open card the same way; the answer
+          // itself is claimed before it is queued, so it is not closed here.
+          const roomId = source.kind === 'user' ? rt.roomOf(id)?.id : undefined
+          const roomCard = roomId === undefined ? undefined : (state.roomQuestions?.[roomId] ?? []).find(item => item.live === true)
+          if (roomCard !== undefined) {
+            roomCard.live = false
+            roomCard.dismissed = true
+            roomCard.dismissedAt = Date.now()
+            void rt.save().catch(() => {})
+          }
         }
         break
       }
@@ -384,5 +394,5 @@ export function install(rt) {
     }
   })
 
-  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, activityView, workView, callDetail, stopRoomTurn })
+  Object.assign(rt, { live, liveOf, roomWaiters, roomProgress, roomInbox, queueRoomMessage, activityView, workView, callDetail, stopRoomTurn })
 }
